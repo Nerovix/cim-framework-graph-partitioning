@@ -1,0 +1,21 @@
+# 忽略编译生成的文件
+*.pyc
+__pycache__/
+
+# 忽略虚拟环境目录
+venv/
+.env/
+
+# 忽略日志文件和临时文件
+*.log
+*.tmp
+
+# 忽略 IDE 和编辑器生成的文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+
+# 模型太大gayhub不给我传
+model_files/
