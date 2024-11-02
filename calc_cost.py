@@ -205,5 +205,5 @@ def print_allocation(allocation):
         print(" ".join(formatted))
 
 
-def calc_best_strategy_on_chip(nodes, res_block_scapegoat):
+def calc_best_strategy_on_chip():
     pass

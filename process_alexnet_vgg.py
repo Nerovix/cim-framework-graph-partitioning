@@ -1,13 +1,13 @@
-from graph import build_graph, getlayer_by_conv_op, build_dependency_bitmask_re_id, find_all_prefixes
-from calc_cost import calc_cores_and_time_needed, calc_best_strategy_on_chip, print_allocation
-from read_file import get_tensor_shape
+from graph import build_graph, build_dependency_bitmask_re_id, find_all_prefixes, get_belong_node
+from calc_cost import calc_best_strategy_on_chip, print_allocation
+import math
 
 
 def process_alexnet_vgg(onnx_graph):
     graph = build_graph(onnx_graph)
 
     is_conv_node = []
-
+    is_fc_node = []
     for n in onnx_graph.node:
         if n.op_type == 'Conv' and [
                 attr.i for attr in n.attribute if attr.name == 'group'][0] == 1:
@@ -16,11 +16,17 @@ def process_alexnet_vgg(onnx_graph):
         else:
             # not pointwise conv, put on simd
             is_conv_node.append(0)
+        if n.op_type == 'Gemm' or n.op_type == 'MatMul':
+            is_fc_node.append(1)
+        else:
+            is_fc_node.append(0)
 
-    print([i for i,v in enumerate(is_conv_node) if v==1])
+    belong_node = get_belong_node(graph, is_conv_node, is_fc_node)
+
+    print([(i, v)for i, v in enumerate(belong_node)])
 
     conv_node_re_id = [0] * len(is_conv_node)  # 0-based
-    re_id_to_node_id=[]
+    re_id_to_node_id = []
     id_cnt = 0
     for i in range(len(is_conv_node)):
         if is_conv_node[i]:
@@ -28,18 +34,42 @@ def process_alexnet_vgg(onnx_graph):
             re_id_to_node_id.append(i)
             id_cnt += 1
 
-    print(id_cnt)
+    re_id_graph = [[] for _ in range(id_cnt)]
 
+    for i, g in enumerate(graph):
+        for j in g[1]:
+            ibel = belong_node[i]
+            jbel = belong_node[j]
+            if ibel != jbel and is_conv_node[ibel] == 1 and is_conv_node[jbel] == 1:
+                re_id_graph[conv_node_re_id[ibel]].append(
+                    conv_node_re_id[jbel])
 
-    dependency_bitmask_re_id = build_dependency_bitmask_re_id(
-        graph, is_conv_node, conv_node_re_id)
+    prefixes_bitmask_re_id = find_all_prefixes(re_id_graph)
     
-    for i in range(len(dependency_bitmask_re_id)):
-        print(str(re_id_to_node_id[i])+' depends on '+str([re_id_to_node_id[j] for j in range(len(dependency_bitmask_re_id)) if dependency_bitmask_re_id[i]>>j&1==1]))
-    
-    prefixes_bitmask_re_id = find_all_prefixes(dependency_bitmask_re_id)
-    
-    for i,v in enumerate(prefixes_bitmask_re_id):
-        print(v.bitcount())
-        print([re_id_to_node_id[i] for i in range(len(dependency_bitmask_re_id)) if v>>i&1==1])
-        
+'''
+    dp = [math.inf] * len(prefixes_bitmask_re_id)
+    dpf = [-1] * len(dp)
+    dpalloc = [0] * len(dp)
+    # prefixes 排过序了，一定是后面的依赖前面
+    for i, iprefix in enumerate(prefixes_bitmask_re_id):
+        if iprefix == 0:
+            dp[i] = 0
+            dpf[i] = -1
+            continue
+        for j, jprefix in enumerate(prefixes_bitmask_re_id):
+            if i != j and iprefix & jprefix == jprefix:
+                if dp[j] == math.inf:
+                    continue
+                s = iprefix - jprefix
+                s = [i for i in range(id_cnt) if s >> i & 1 == 1]
+                # s 里面是按照conv重编号的
+                cost, alloc = calc_best_strategy_on_chip(
+                    s, re_id_graph, re_id_to_node_id, onnx_graph)
+                if dp[j] + cost < dp[i]:
+                    dp[i] = dp[j] + cost
+                    dpf[i] = j
+                    dpalloc[i] = alloc
+
+    # 打印一下方案看看
+    # askdfja;sldkfjals;kfj
+'''

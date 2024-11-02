@@ -26,134 +26,101 @@ def build_graph(onnx_graph):
     return graph
 
 
-# 按照最长链分层，每个非conv的节点属于conv节点的层
-
-
-def getlayer_by_conv_op(g, is_conv):
-    outdeg = [0] * len(g)
-    for i, v in enumerate(g):
-        outdeg[i] = len(v[1])
-    q = deque([i for i, v in enumerate(outdeg) if v == 0])
-    # 终点只有一个
-    assert len(q) == 1
-
-    layer = [0] * len(g)
-
-    while q:
-        x = q.popleft()
-        if is_conv[x]:
-            layer[x] += 1
-        for y in g[x][0]:
-            outdeg[y] -= 1
-            layer[y] = max(layer[y], layer[x])
-            if outdeg[y] == 0:
-                q.append(y)
-
-    return layer
-
-
-def build_dependency_bitmask_re_id(graph, is_conv_node, conv_node_re_id):
+# 残差的加法节点必须在主链（最长链）上，不然会出问题，所以先小dp一下找主链
+# fc放最后，fc之前的都往conv上挂，fc之后的都先保留。fc节点是割点，不会有问题
+# nm改来改去alskdjfalaskdjfaksjdlfalsdkjfalksjdflasdf
+def get_belong_node(graph, is_conv_node, is_fc_node):
     indeg = [len(g[0]) for g in graph]
-    dependency_bitmask = [0] * len(graph)
     q = deque([i for i, v in enumerate(indeg) if v == 0])
+    last = [-1] * len(graph)
+    dp = [1] * len(graph)
     while q:
         x = q.popleft()
-        if is_conv_node[x] == 1:
-            dependency_bitmask[x] |= 1 << conv_node_re_id[x]
         for y in graph[x][1]:
+            if dp[y] < dp[x] + 1:
+                dp[y] = dp[x] + 1
+                last[y] = x
             indeg[y] -= 1
-            dependency_bitmask[y] |= dependency_bitmask[x]
             if indeg[y] == 0:
                 q.append(y)
-    dependency_bitmask_re_id = [0] * sum(is_conv_node)
+    main_chain = []
+    x = 0
     for i in range(len(graph)):
-        if is_conv_node[i]:
-            dependency_bitmask_re_id[conv_node_re_id[i]
-                                     ] = dependency_bitmask[i]
-    return dependency_bitmask_re_id
+        if dp[i] > dp[x]:
+            x = i
+    while x != -1:
+        main_chain.append(x)
+        x = last[x]
 
+    main_chain.reverse()
+    in_main_chain = [0] * len(graph)
+    for i in main_chain:
+        in_main_chain[i] = 1
+
+    # 残差的加法一定在主链上。先单独对主链算最近点，挂上去
+    # 然后剩下的点就都是残差卷积和残差卷积旁边的小算子，直接也就近挂上去
+    belong_node = [-1] * len(graph)
+    q = deque([i for i in range(len(graph)) if is_conv_node[i] == 1])
+    while q:
+        x = q.popleft()
+        if belong_node[x] == -1:
+            belong_node[x] = x
+        for y in graph[x][0] + graph[x][1]:
+            if in_main_chain[y] == in_main_chain[x] and \
+                    belong_node[y] == -1 and is_fc_node[y] == 0:
+                belong_node[y] = belong_node[x]
+                q.append(y)
+
+    # 如果这样做一次结束了还有还有剩下的点，那就是存在残差分支没有卷积
+    # 正常说残差分支要么没有算子要么一定有至少一个卷积，但是先考虑上
+    q = deque([i for i in range(len(graph)) if belong_node[i] != -1])
+    while q:
+        x = q.popleft()
+        if belong_node[x] == -1:
+            belong_node[x] = x
+        for y in graph[x][0] + graph[x][1]:
+            if belong_node[y] == -1 and is_fc_node[y] == 0:
+                belong_node[y] = belong_node[x]
+                q.append(y)
+
+    # fc自娱自乐
+    q = deque([i for i in range(len(graph)) if is_fc_node[i] == 1])
+    while q:
+        x = q.popleft()
+        if belong_node[x] == -1:
+            belong_node[x] = x
+        for y in graph[x][0] + graph[x][1]:
+            if belong_node[y] == -1:
+                belong_node[y] = belong_node[x]
+                q.append(y)
+
+    assert min(belong_node)>=0
+    return belong_node
 
 # find all dependency prefixes for dp
-def find_all_prefixes(dependency_bitmask_re_id):
+# 依托史
+def find_all_prefixes(graph_re_id):
+    node_cnt=len(graph_re_id)
+    indeg=[0]*node_cnt
+    print("ok there are "+str(node_cnt)+" nodes that i need to calc")
+    for i in range(node_cnt):
+        for j in graph_re_id[i]:
+            indeg[j] += 1
 
-    # input bitmasks are supposed to be pairwise distinct
-    for i in range(len(dependency_bitmask_re_id)):
-        for j in range(i + 1, len(dependency_bitmask_re_id)):
-            assert dependency_bitmask_re_id[i] != dependency_bitmask_re_id[j]
-
-    def remove_extra(bitmask_list):
-        if bitmask_list == []:
-            return []
-        max_bit = max(bitmask_list).bit_length()
-        bit_cnt = [0] * max_bit
-
-        for v in bitmask_list:
-            for i in range(max_bit):
-                if v >> i & 1:
-                    bit_cnt[i] += 1
-
-        while True:
-            flag = -1
-            for i in range(len(bitmask_list)):
-                bad = True
-                for j in range(max_bit):
-                    if bitmask_list[i] >> j & 1 == 1 and bit_cnt[j] == 1:
-                        bad = False
-                        break
-                if bad:
-                    flag = i
-                    break
-            if flag == -1:
-                break
-
-            for j in range(max_bit):
-                if dependency_bitmask_re_id[flag] >> j & 1 == 1:
-                    bit_cnt[j] -= 1
-
-            bitmask_list.pop(flag)
-
-        return bitmask_list
-
-    graph = [[]] * len(dependency_bitmask_re_id)
-    print(graph)
-    indeg = []
-    for i, bmi in enumerate(dependency_bitmask_re_id):
-        protential_direct_denpendecies = []
-        for j, bmj in enumerate(dependency_bitmask_re_id):
-            if bmi & bmj == bmj and i != j:
-                # bmj is a subset of bmi
-                protential_direct_denpendecies.append(bmj)
-        ind = 0
-        print()
-        for v in remove_extra(protential_direct_denpendecies):
-            j = [j for j, bmj in enumerate(
-                dependency_bitmask_re_id) if v == bmj][0]
-            print(j, i)
-            graph[j].append(i)
-            ind += 1
-        indeg.append(ind)
-        print(ind)
-
-    print(graph)
-
-    # now dfs on graph
     prefixes = dict()
-
     def dfs(bitmask):
         if prefixes.get(bitmask) is not None:
             return
-        print("shit:" + bin(bitmask))
-        print(indeg)
         prefixes[bitmask] = True
-        for i in range(len(dependency_bitmask_re_id)):
+        for i in range(node_cnt):
             if bitmask >> i & 1 == 0 and indeg[i] == 0:
-                # 选i, 删除所有出边
-                for j in graph[i]:
+                for j in graph_re_id[i]:
                     indeg[j] -= 1
                 dfs(bitmask ^ (1 << i))
-                for j in graph[i]:
+                for j in graph_re_id[i]:
                     indeg[j] += 1
-
+    
     dfs(0)
-
-    return [prefixes.keys()].sort()
+    prefixes_list = list(prefixes.keys())
+    prefixes_list.sort()
+    return prefixes_list
