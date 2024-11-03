@@ -19,6 +19,9 @@ def build_graph(onnx_graph):
             output_from[output_name] = i
 
     for i, node in enumerate(onnx_graph.node):
+        assert len(
+            node.output) <= 1, "oops, my stupid code assumes every node has \
+                only one output tensor while it seems some node does not."
         for input_name in node.input:
             if output_from.get(input_name) is not None:
                 graph[i][0].append(output_from[input_name])
@@ -94,20 +97,21 @@ def get_belong_node(graph, is_conv_node, is_fc_node):
                 belong_node[y] = belong_node[x]
                 q.append(y)
 
-    assert min(belong_node)>=0
+    assert min(belong_node) >= 0
     return belong_node
 
 # find all dependency prefixes for dp
 # 依托史
 def find_all_prefixes(graph_re_id):
-    node_cnt=len(graph_re_id)
-    indeg=[0]*node_cnt
-    print("ok there are "+str(node_cnt)+" nodes that i need to calc")
+    node_cnt = len(graph_re_id)
+    indeg = [0] * node_cnt
+    print("ok there are " + str(node_cnt) + " nodes that i need to calc")
     for i in range(node_cnt):
         for j in graph_re_id[i]:
             indeg[j] += 1
 
     prefixes = dict()
+
     def dfs(bitmask):
         if prefixes.get(bitmask) is not None:
             return
@@ -119,8 +123,64 @@ def find_all_prefixes(graph_re_id):
                 dfs(bitmask ^ (1 << i))
                 for j in graph_re_id[i]:
                     indeg[j] += 1
-    
+
     dfs(0)
     prefixes_list = list(prefixes.keys())
     prefixes_list.sort()
     return prefixes_list
+
+# 把计算图片段划分成链
+def split_to_chain(conv_node_re_id, re_id_graph_edgeset):
+    nodecnt = len(conv_node_re_id)
+    simplified_graph = [[] for _ in range(nodecnt)]
+    indeg = [0] * nodecnt
+    used = [False] * nodecnt
+    usedcnt = 0
+    for i in range(nodecnt):
+        for j in range(nodecnt):
+            if re_id_graph_edgeset.get(
+                    (conv_node_re_id[i], conv_node_re_id[j]))!=None:
+                simplified_graph[i].append(j)
+                indeg[j] += 1
+    res=[]
+    while usedcnt < nodecnt:
+        # 就贪心，每次取出最长链
+        q = deque()
+        dis = [0] * nodecnt
+        last = [-1] * nodecnt
+        for i in range(nodecnt):
+            if indeg[i] == 0 and not used[i]:
+                q.append(i)
+                dis[i] = 1
+                last[i] = -1
+        while (q):
+            x = q.popleft()
+            for y in simplified_graph[x]:
+                if used[y]:
+                    continue
+                if dis[y] < dis[x] + 1:
+                    dis[y] = dis[x] + 1
+                    last[y] = x
+                indeg[y] -= 1
+                if indeg[y] == 0:
+                    q.append(y)
+        ed=-1
+        for i in range(nodecnt):
+            if not used[i]:
+                if ed==-1 or dis[i]>dis[ed]:
+                    print(ed,i)
+                    ed=i
+        m=dis[ed]
+        chain=[]
+        while ed!=-1:
+            chain.append(conv_node_re_id[ed])
+            used[ed]=True
+            ed=last[ed]
+        
+        assert(len(chain)==m)
+        usedcnt+=len(chain)
+        chain.reverse()
+        res.append(chain)
+    return res
+
+

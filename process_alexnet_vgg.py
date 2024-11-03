@@ -1,5 +1,6 @@
-from graph import build_graph, build_dependency_bitmask_re_id, find_all_prefixes, get_belong_node
-from calc_cost import calc_best_strategy_on_chip, print_allocation
+from graph import build_graph, find_all_prefixes, get_belong_node
+from calc_cost import calc_best_strategy_on_chip
+from read_file import get_tensor_shape
 import math
 
 
@@ -36,6 +37,7 @@ def process_alexnet_vgg(onnx_graph):
 
     re_id_graph = [[] for _ in range(id_cnt)]
 
+    re_id_graph_edgeset = dict()
     for i, g in enumerate(graph):
         for j in g[1]:
             ibel = belong_node[i]
@@ -43,10 +45,22 @@ def process_alexnet_vgg(onnx_graph):
             if ibel != jbel and is_conv_node[ibel] == 1 and is_conv_node[jbel] == 1:
                 re_id_graph[conv_node_re_id[ibel]].append(
                     conv_node_re_id[jbel])
+                shape = get_tensor_shape(
+                    onnx_graph, onnx_graph.node[re_id_to_node_id[conv_node_re_id[ibel]]].output[0])
+                re_id_graph_edgeset[(conv_node_re_id[ibel],
+                                     conv_node_re_id[jbel])] = shape
+                assert len(shape) == 4, \
+                    'shape should be [N * C * H * W], but dimension of the tensor is not 4, wtffff'
 
-    prefixes_bitmask_re_id = find_all_prefixes(re_id_graph)
+    re_id_rev_graph=[[] for _ in range(id_cnt)]
+    for i in range(id_cnt):
+        for j in re_id_graph[i]:
+            re_id_rev_graph[j].append(i)
     
+    print(onnx_graph.input[0].type.tensor_type.shape)
+
 '''
+    prefixes_bitmask_re_id = find_all_prefixes(re_id_graph)
     dp = [math.inf] * len(prefixes_bitmask_re_id)
     dpf = [-1] * len(dp)
     dpalloc = [0] * len(dp)
@@ -64,7 +78,7 @@ def process_alexnet_vgg(onnx_graph):
                 s = [i for i in range(id_cnt) if s >> i & 1 == 1]
                 # s 里面是按照conv重编号的
                 cost, alloc = calc_best_strategy_on_chip(
-                    s, re_id_graph, re_id_to_node_id, onnx_graph)
+                    s, re_id_graph,re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, onnx_graph)
                 if dp[j] + cost < dp[i]:
                     dp[i] = dp[j] + cost
                     dpf[i] = j

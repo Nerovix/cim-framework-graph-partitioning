@@ -18,7 +18,7 @@ if __name__ == "__main__":
     # onnx_file_path = "./model_files/bvlcalexnet-12-qdq.onnx"
     # onnx_file_path = "./model_files/mobilenetv2-12-qdq.onnx"
     onnx_file_path = "./model_files/resnet50-v1-12-qdq.onnx"
-    # onnx_file_path = "./model_files/resnet18-v1-7.onnx"
+    # onnx_file_path = "./model_files/resnet18-v1-.7.onnx"
     # onnx_file_path = "./model_files/vgg16-12-qdq.onnx"
     # onnx_file_path = "./model_files/efficientnet-lite4-11-qdq.onnx"
     

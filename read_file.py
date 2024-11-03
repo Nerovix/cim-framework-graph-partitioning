@@ -19,24 +19,24 @@ def print_graph_nodes(graph):
         print()
         '''
 
-def get_tensor_shape(graph, tensor_name):
+def get_tensor_shape(onnx_graph, tensor_name):
     
-    for initializer in graph.initializer:
+    for initializer in onnx_graph.initializer:
         if initializer.name == tensor_name:
             shape = [d.dim_value for d in initializer.dims]
             return shape
     
-    for input_info in graph.input:
+    for input_info in onnx_graph.input:
         if input_info.name == tensor_name:
             shape = [d.dim_value for d in input_info.type.tensor_type.shape.dim]
             return shape
     
-    for output_info in graph.output:
+    for output_info in onnx_graph.output:
         if output_info.name == tensor_name:
             shape = [d.dim_value for d in output_info.type.tensor_type.shape.dim]
             return shape
     
-    for value_info in graph.value_info:
+    for value_info in onnx_graph.value_info:
         if value_info.name == tensor_name:
             shape = [d.dim_value for d in value_info.type.tensor_type.shape.dim]
             return shape

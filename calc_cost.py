@@ -1,9 +1,11 @@
+from collections import deque
 import math
 import onnx
 from onnx import shape_inference
 from onnx import GraphProto, ModelProto, NodeProto
 import cimpara as cp
 from read_file import get_tensor_shape
+from graph import split_to_chain
 
 '''
 重新理清楚
@@ -33,10 +35,14 @@ T个macro groups, 现在存不同权重
 '''
 
 
-def calc_cores_and_time_needed(graph, node):
+def calc_cores_and_time_needed(onnx_graph, node):
     if node.op_type == 'Conv':
-        [N, C_in, H, W] = get_tensor_shape(graph, node.input[0])
-        [C_out, C_in, K_h, K_w] = get_tensor_shape(graph, node.input[1])
+        [N, C_in, H, W] = get_tensor_shape(onnx_graph, node.input[0])
+        [C_out, C_in, K_h, K_w] = get_tensor_shape(onnx_graph, node.input[1])
+
+        if C_in == 1:
+            raise Exception(
+                "whhhaaaat??? this seems to be a depthwise conv and shouldn't be considered here!")
 
         N = 1
 
@@ -47,11 +53,11 @@ def calc_cores_and_time_needed(graph, node):
         if not P:
             P = [0, 0, 0, 0]
 
-        print("conv layer:")
-        print("[N, C_in, H, W]" + str([N, C_in, H, W]))
-        print("[C_out, C_in, K_h, K_w] " + str([C_out, C_in, K_h, K_w]))
-        print("S" + str(S))
-        print("P" + str(P))
+        # print("conv layer:")
+        # print("[N, C_in, H, W]" + str([N, C_in, H, W]))
+        # print("[C_out, C_in, K_h, K_w] " + str([C_out, C_in, K_h, K_w]))
+        # print("S" + str(S))
+        # print("P" + str(P))
 
         H_out = (H + P[0] + P[2] - K_h) // S[0] + 1
         W_out = (W + P[1] + P[3] - K_w) // S[1] + 1
@@ -65,145 +71,230 @@ def calc_cores_and_time_needed(graph, node):
         if cp.H * cp.m * cp.T < K_h * K_w * C_in:
             raise Exception('holy the conv op is tooooooo big')
 
-        channels_on_a_core = cp.n * cp.W // cp.weight_width * cp.K
-        cores_needed = math.ceil(C_out / channels_on_a_core)
+        # 核内允许权重复制的次数：每个channel_out需要K_h * K_w * C_in个权重
+        # 每个macro group可以放下H*m个权重
+        # 因此放下一个channel_out需要ceil(K_h * K_w * C_in  / (H * m))个macro group
+        # 因此能放下floor(T/ceil(...))次权重复制
+        duplicate_times = cp.T // math.ceil(K_h * K_w * C_in / (cp.H * cp.m))
 
-        time_needed = N * H_out * W_out * cp.m * cp.activation_width
+        cores_needed = math.ceil(C_out / cp.channels_on_a_core)
 
-        return cores_needed, time_needed
+        # 需要计算周期：img2col之后有H_out * W_out次输入
+        # 每m * activation_width周期可以计算一次
+        # 然后除以权重复制次数
+        # batchsize留到分配core的时候再考虑
+        # 因为涉及到core层面的权重复制
+
+        time_needed = math.ceil(
+            H_out *
+            W_out *
+            cp.m *
+            cp.activation_width /
+            duplicate_times)
+
+        # 把weight load上去需要的时间
+        # /8转化为Byte
+        load_time_needed = math.ceil(
+            C_out *
+            C_in *
+            K_h *
+            K_w *
+            cp.weight_width /
+            8 /
+            cp.global_memory_bandwidth)  # todo 输入输出带宽要不要对半分？
+
+        return cores_needed, time_needed, load_time_needed
 
     raise Exception('you must be joking, this is NOT a conv op')
 
 
-# ABANDONED
-# def put_nodes_on_chip(cores_needed):
-#     # 假定核的个数都是偶数，如果是奇数，给他+1
-#     cores_needed = [x + 1 if x % 2 == 1 else x for x in cores_needed]
-#     line = 0  # 现在的行组
-#     col = 0  # 现在的列（下一个空的）
-#     ty = 0  # type
+'''
+仔细整理一下现在的策略
 
-#     P = cp.P
-#     Q = cp.Q
+传进来一个计算图片段。首先，贪心做个计算图片段的链划分
+比如
+A---B---C---D---E
+    |       |
+    ----G---H
+这种，先划分成ABCDE和GH，然后就按照ABCDEGH这样的顺序往pattern上面放
+这样尽可能连续的在一起，然后不连续的，比如BG、DH之间就用global通信。
+这样就确定了往pattern上放的顺序
 
-#     '''
-#     ty == 0, 正常
-#     ...###__...
-#     ...###__...
+然后要做权重复制。代价是max_所有节点{计算时间*batchsize/此节点权重复制次数}+通信时间(压力最大的路由器)
+权重复制越多，通信时间就越高，计算时间就越少
+考虑每次取出计算时间最大的节点，然后给他加权重复制的次数，然后重新算代价。这个代价的计算时间应该变少了，通信时间应该增加了
+直到新的代价比权重复制之前还要大，说明复制太多了，就停下
 
-#     ty == 1, 刚从上一个行组下来，拐弯消耗了上两格
-#     ####...
-#     ####...
-#     ##__...
-#     ____...
-
-#     '''
-
-#     allocation = []
-#     for c in cores_needed:
-#         c //= 2
-#         allo = []
-#         if c == 1:
-#             # 如果只需要两个核，可能能挤在ty == 1 的碎片中，特殊考虑
-#             if ty == 0:
-#                 if line % 2 == 0:  # ->
-#                     allo.append((line * 2, col))
-#                     allo.append((line * 2 + 1, col))
-#                     col += 1
-#                     if col == Q:
-#                         col = Q - 1
-#                         line += 1
-#                 else:
-#                     allo.append((line * 2, col))
-#                     allo.append((line * 2 + 1, col))
-#                     col -= 1
-#                     if col == -1:
-#                         col = 0
-#                         line += 1
-#             else:
-#                 if line % 2 == 0:  # ->
-#                     allo.append((line * 2 + 1, 0))
-#                     allo.append((line * 2 + 1, 1))
-#                     col = 2
-#                     ty = 0
-#                 else:
-#                     allo.append((line * 2 + 1, Q - 1))
-#                     allo.append((line * 2 + 1, Q - 2))
-#                     col = Q - 3
-#                     ty = 0
-#         else:
-#             # 如果需要多个核，先排掉type 1或者type 0且在最后两行形成的碎片
-#             if ty == 0:
-#                 if line % 2 == 0 and col == Q - 1:
-#                     line += 1
-#                     col = Q - 1
-#                 elif line % 2 == 1 and col == 0:
-#                     line += 1
-#                     col = 0
-#             else:
-#                 if line % 2 == 0:
-#                     col = 2
-#                     ty = 0
-#                 else:
-#                     col = Q - 3
-#                     ty = 0
-#             # 然后开始两个两个往上摆
-#             while c > 0:
-#                 if ty == 0:
-#                     if line % 2 == 0:  # ->
-#                         if col == 0:
-#                             ty = 1
-#                             allo.append((line * 2, 0))
-#                             allo.append((line * 2, 1))
-#                         else:
-#                             allo.append((line * 2, col))
-#                             allo.append((line * 2 + 1, col))
-#                             col += 1
-#                             if col == Q:
-#                                 col = Q - 1
-#                                 line += 1
-#                     else:
-#                         if col == Q - 1:
-#                             ty = 1
-#                             allo.append((line * 2, Q - 1))
-#                             allo.append((line * 2, Q - 2))
-#                         else:
-#                             allo.append((line * 2, col))
-#                             allo.append((line * 2 + 1, col))
-#                             col -= 1
-#                             if col == -1:
-#                                 col = 0
-#                                 line += 1
-#                 else:
-#                     if line % 2 == 0:  # ->
-#                         allo.append((line * 2 + 1, 0))
-#                         allo.append((line * 2 + 1, 1))
-#                         col = 2
-#                         ty = 0
-#                     else:
-#                         allo.append((line * 2 + 1, Q - 1))
-#                         allo.append((line * 2 + 1, Q - 2))
-#                         col = Q - 3
-#                         ty = 0
-#                 c -= 1
-#         for (x, y) in allo:
-#             if x >= P:
-#                 return None
-#         allocation.append(allo)
-
-#     return allocation
+我发现这里好像又没有必要让权重复制的次数必须是二的幂次了，所以就先不要求是二的幂次
+'''
 
 
-def print_allocation(allocation):
-    chip = [[-1] * cp.Q for _ in range(cp.P)]
-    for i in range(len(allocation)):
-        for (x, y) in allocation[i]:
-            chip[x][y] = i
+def calc_best_strategy_on_chip(
+        conv_node_re_id,
+        re_id_graph,
+        re_id_rev_graph,
+        re_id_graph_edgeset,  # 一个dict，key是一个二元组描述一条边，编号是conv重编号。value是边上数据的shape
+        re_id_to_node_id,
+        onnx_graph):
 
-    for row in chip:
-        formatted = [f"{i:2d}" for i in row]
-        print(" ".join(formatted))
+    allnodescnt = len(re_id_graph)
+    in_conv_node_re_id = [0] * allnodescnt
+    for i in conv_node_re_id:
+        in_conv_node_re_id[i] = 1
+    nodecnt = len(conv_node_re_id)
+    pattern_pos_lists = cp.pattern_pos_lists
 
+    # 先确定往pattern上放的顺序
+    chain_list = split_to_chain(conv_node_re_id, re_id_graph_edgeset)
+    conv_node_re_id = []
+    communicate_on_chip = dict()
+    for chain in chain_list:
+        conv_node_re_id += chain
+        # 顺便确定哪些关系用片上通信，哪些用片外
+        for i in range(len(chain) - 1):
+            communicate_on_chip[(chain[i], chain[i + 1])] = True
 
-def calc_best_strategy_on_chip():
-    pass
+    cores_needed_list = []
+    time_needed_list = []
+    load_time_needed_all = 0
+
+    for node_re_id in conv_node_re_id:
+        node = onnx_graph.node[re_id_to_node_id[node_re_id]]
+        cores_needed, time_needed, load_time_needed = calc_cores_and_time_needed(
+            onnx_graph, node)
+        cores_needed_list.append(cores_needed)
+        time_needed_list.append(time_needed)
+        load_time_needed_all += load_time_needed
+
+    for pattern_pos_list in pattern_pos_lists:
+        duplicate_times = [1] * nodecnt
+
+        # 这个函数简单按照core层的权重复制次数把节点分配到chip上
+        def put_nodes_on_chip(duplicate_times):
+            assert len(pattern_pos_list) == cp.C
+
+            # 先看节点够不够
+            if sum([cores_needed[i] * duplicate_times[i]
+                   for i in range(nodecnt)]) > cp.C:
+                return None
+
+            j = 0
+            allocation = []
+            for i in range(nodecnt):
+                alloc = []
+                for _ in range(duplicate_times[i]):
+                    alc = []
+                    for __ in range(cores_needed[i]):
+                        alc.append(pattern_pos_list[j])
+                        j += 1
+                    alloc.append(alc)
+                allocation.append(alloc)
+
+            # allocation[i][j][k]=(x,y)表示第i个node，第j个duplicate，第k个core的位置是(x,y)
+            return allocation
+
+        def get_cost_for_an_allocation(allocation):
+            calc_time_list = [0] * nodecnt
+            communication_time = 0
+            for i in range(nodecnt):
+                calc_time_list[i] = math.ceil(
+                    cp.batch_size * time_needed_list[i] / len(allocation[i]))
+
+            chip_node_load = [[0] * cp.Q for _ in range(cp.P)]
+            global_memory_load = 0
+            # 计算节点间的通信负载
+
+            def add_load_sender(i, k, shape):
+                sender = k % duplicate_times[i]
+                channelcnt = shape[1]
+                for core in allocation[i][sender]:
+                    use_channel = min(
+                        channelcnt, cp.channels_on_a_core)
+                    chip_node_load[core[0]][core[1]] += use_channel * \
+                        shape[2] * shape[3] * cp.activation_width // 8  # 转Byte
+                    channelcnt -= use_channel
+                assert channelcnt == 0
+
+            def add_load_receiver(j, k, shape):
+                receiver = k % duplicate_times[j]
+                for core in allocation[i][receiver]:
+                    chip_node_load[core[0]][core[1]] += shape[1] * \
+                        shape[2] * shape[3] * cp.activation_width // 8
+
+            def add_load_global(shape):
+                global_memory_load += shape[1] * shape[2] * \
+                    shape[3] * cp.activation_width // 8
+
+            for i in range(nodecnt):
+                for j in range(nodecnt):
+                    shape = re_id_graph_edgeset[(
+                        conv_node_re_id[i], conv_node_re_id[j])]
+                    if shape is None:
+                        continue
+                    # 有batch_size个batch，
+                    # 发送方权重复制了duplicate_times[i]次
+                    # 接收方权重复制了duplicate_times[j]次
+                    # 于是第k个batch(0-based)
+                    # 由发送方的第k%duplicate_times[i]个权重复制到接收方的第k%duplicate_times[j]个权重复制
+                    # 然后，累加节点压力的时候，发送方要枚举每个权重复制，接收方枚举每个权重复制的每个节点
+                    for k in range(cp.batch_size):
+                        # 发送方
+                        add_load_sender(i, k, shape)
+                        # 接收方
+                        add_load_receiver(j, k, shape)
+
+                        # 如果不是片上通信，不仅要考虑上述一边的发和一边的收，还要考虑global的一读一写
+                        if communicate_on_chip[(
+                                conv_node_re_id[i], conv_node_re_id[j])] is None:
+                            add_load_global(shape)
+                            add_load_global(shape)  # 一读一写，两遍
+
+             # 计算节点输入负载
+            for i in range(nodecnt):
+                for j in re_id_rev_graph[conv_node_re_id[i]]:
+                    if in_conv_node_re_id[j] == 1:
+                        continue
+                    # j->i
+                    shape = re_id_graph_edgeset[(j, conv_node_re_id[i])]
+                    assert shape is not None, 'shape should not be None when calculating input load'
+
+                    for k in range(cp.batch_size):
+                        # i是接收方，从global读
+                        add_load_receiver(i, k, shape)
+                        add_load_global(shape)
+
+                # 还要讨论，有可能这是第一个节点
+                flag = False
+                data_name = onnx_graph.input[0].name
+                node = onnx_graph.node[re_id_to_node_id[conv_node_re_id[i]]]
+                for input_name in node.input:
+                    if input_name == data_name:
+                        flag = True
+                        break
+                if flag:
+                    shape = get_tensor_shape(onnx_graph, data_name)
+                    for k in range(cp.batch_size):
+                        add_load_receiver(i, k, shape)
+                        add_load_global(shape)
+
+            # 计算节点输出负载
+            for i in range(nodecnt):
+                flag = False
+                for j in re_id_graph[conv_node_re_id[i]]:
+                    if in_conv_node_re_id[j] == 0:
+                        flag = True
+                        break
+                # 存在某个节点要用这个节点的输入，并且不再当前这个stage里面，说明需要把这个点写出去
+                if flag:
+                    for k in range(cp.batch_size):
+                        add_load_sender(i, k, shape)
+                        add_load_global(shape)
+
+            communication_time = max(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
+                                     math.ceil(global_memory_load / cp.B))
+            return calc_time_list,communication_time
+
+        while ...:
+            allocation=....
+            cost=...
+            .........................alksdjf;lkasjdf;lkajsd;lfkjasd;lkfjas;dlkf
