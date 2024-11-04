@@ -166,6 +166,8 @@ def calc_best_strategy_on_chip(
         time_needed_list.append(time_needed)
         load_time_needed_all += load_time_needed
 
+    best_time_all_patterns=math.inf
+    best_allocation_all_patterns=None
     for pattern_pos_list in pattern_pos_lists:
         duplicate_times = [1] * nodecnt
 
@@ -200,6 +202,7 @@ def calc_best_strategy_on_chip(
                 calc_time_list[i] = math.ceil(
                     cp.batch_size * time_needed_list[i] / len(allocation[i]))
 
+            most_expensive_request = 0
             chip_node_load = [[0] * cp.Q for _ in range(cp.P)]
             global_memory_load = 0
             # 计算节点间的通信负载
@@ -248,6 +251,24 @@ def calc_best_strategy_on_chip(
                                 conv_node_re_id[i], conv_node_re_id[j])] is None:
                             add_load_global(shape)
                             add_load_global(shape)  # 一读一写，两遍
+                        # 如果是片上通信，要统计开销最大的
+                        else:
+                            sender = k % duplicate_times[i]
+                            receiver = k % duplicate_times[j]
+                            for icore in allocation[i][sender]:
+                                use_channel = min(
+                                    channelcnt, cp.channels_on_a_core)
+                                for jcore in allocation[j][receiver]:
+                                    most_expensive_request = max(
+                                        most_expensive_request,
+                                        use_channel *
+                                        shape[2] *
+                                        shape[3] *
+                                        cp.activation_width //
+                                        8 *
+                                        (math.abs(icore[0] - jcore[0]) + math.abs(icore[1] - jcore[1]))
+                                    )
+                                channelcnt -= use_channel
 
              # 计算节点输入负载
             for i in range(nodecnt):
@@ -291,10 +312,39 @@ def calc_best_strategy_on_chip(
                         add_load_global(shape)
 
             communication_time = max(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
-                                     math.ceil(global_memory_load / cp.B))
-            return calc_time_list,communication_time
+                                     math.ceil(global_memory_load / cp.B),
+                                     math.ceil(most_expensive_request / cp.B))
+            return calc_time_list, communication_time + \
+                max(calc_time_list) + load_time_needed_all
 
-        while ...:
-            allocation=....
-            cost=...
-            .........................alksdjf;lkasjdf;lkajsd;lfkjasd;lkfjas;dlkf
+        best_time = math.inf
+        best_allocation = None
+        while True:
+            allocation = put_nodes_on_chip(duplicate_times)
+            calc_time_list, cur_time = get_cost_for_an_allocation(allocation)
+            if cur_time > best_time:
+                break
+            best_allocation = allocation
+            best_time = cur_time
+            calc_time_list_id = [(v, i) for i, v in enumerate(calc_time_list)]
+            calc_time_list_id.sort()
+            calc_time_list_id.reverse()
+            used_core_num = sum([cores_needed[i] * duplicate_times[i]
+                               for i in range(nodecnt)])
+            j = 0
+            assert(len(calc_time_list_id)==nodecnt)
+            while j < nodecnt:
+                if used_core_num+cores_needed[calc_time_list_id[j][1]] <= cp.C:
+                    duplicate_times[calc_time_list_id[j][1]] += 1
+                    break
+                else :
+                    j+=1
+            
+            if j==nodecnt:
+                break
+        if best_time<best_time_all_patterns:
+            best_time_all_patterns=best_time
+            best_allocation_all_patterns=best_allocation
+    
+    return best_time_all_patterns, best_allocation_all_patterns
+# 注意！传进来的nodes已经重新排序了！

@@ -28,14 +28,14 @@ def process_alexnet_vgg(onnx_graph):
 
     conv_node_re_id = [0] * len(is_conv_node)  # 0-based
     re_id_to_node_id = []
-    id_cnt = 0
+    conv_node_cnt = 0
     for i in range(len(is_conv_node)):
         if is_conv_node[i]:
-            conv_node_re_id[i] = id_cnt
+            conv_node_re_id[i] = conv_node_cnt
             re_id_to_node_id.append(i)
-            id_cnt += 1
+            conv_node_cnt += 1
 
-    re_id_graph = [[] for _ in range(id_cnt)]
+    re_id_graph = [[] for _ in range(conv_node_cnt)]
 
     re_id_graph_edgeset = dict()
     for i, g in enumerate(graph):
@@ -52,15 +52,18 @@ def process_alexnet_vgg(onnx_graph):
                 assert len(shape) == 4, \
                     'shape should be [N * C * H * W], but dimension of the tensor is not 4, wtffff'
 
-    re_id_rev_graph=[[] for _ in range(id_cnt)]
-    for i in range(id_cnt):
+    re_id_rev_graph=[[] for _ in range(conv_node_cnt)]
+    for i in range(conv_node_cnt):
         for j in re_id_graph[i]:
             re_id_rev_graph[j].append(i)
     
-    print(onnx_graph.input[0].type.tensor_type.shape)
+    # print(onnx_graph.input[0].type.tensor_type.shape)
+    prefixes_bitmask_re_id = find_all_prefixes(re_id_graph)
+    for prefix in prefixes_bitmask_re_id:
+        print([conv_node_re_id[i] for i in range(conv_node_cnt) if prefix >> i & 1 == 1])
+
 
 '''
-    prefixes_bitmask_re_id = find_all_prefixes(re_id_graph)
     dp = [math.inf] * len(prefixes_bitmask_re_id)
     dpf = [-1] * len(dp)
     dpalloc = [0] * len(dp)
@@ -75,7 +78,7 @@ def process_alexnet_vgg(onnx_graph):
                 if dp[j] == math.inf:
                     continue
                 s = iprefix - jprefix
-                s = [i for i in range(id_cnt) if s >> i & 1 == 1]
+                s = [i for i in range(conv_node_cnt) if s >> i & 1 == 1]
                 # s 里面是按照conv重编号的
                 cost, alloc = calc_best_strategy_on_chip(
                     s, re_id_graph,re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, onnx_graph)
