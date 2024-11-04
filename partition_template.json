@@ -1,0 +1,74 @@
+{
+    "cores":{
+        "row":0,
+        "col":0,
+        "stages":{
+            "0":{
+                "cluster_id":0,
+                "instructions":[
+                    {
+                        "op":"send",
+                        "attr":{
+
+                        }   
+                    },
+                    {
+                        "op":"receive",
+                        "attr":{
+                            
+                        }   
+                    },
+                    {
+                        "op":"read",
+                        "attr":{
+                            
+                        }   
+                    },
+                    {
+                        "op":"write",
+                        "attr":{
+                            
+                        }   
+                    },
+                    {
+                        "op":"conv",
+                        "attr":{
+                            
+                        }   
+                    },
+                    {
+                        "op":"add",
+                        "attr":{
+                            
+                        }   
+                    },
+                    {
+                        "op":"relu",
+                        "attr":{
+                            
+                        }   
+                    },
+                    {
+                        "op":"pooling",
+                        "attr":{
+                            
+                        }   
+                    },
+                    {
+                        "op":"depthwise_conv",
+                        "attr":{
+                            
+                        }   
+                    },
+                    {
+                        "op":"gemm",
+                        "attr":{
+                            
+                        }   
+                    }
+                ]
+            }
+
+        }
+    }
+}

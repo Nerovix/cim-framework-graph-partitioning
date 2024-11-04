@@ -1,5 +1,5 @@
 configs = [(),
-           (16, 8, 32, 8, 16, 16, 512, 144, 25.6, 12, 12, 51.2),]
+           (16, 8, 32, 8, 16, 16, 512, 144, 16, 12, 12, 64),]
 config_id = 1
 m, n, H, W, T, K, local_memory_size, C, B, P, Q, global_memory_bandwidth = configs[config_id]
 batch_size=8
