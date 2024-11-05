@@ -103,6 +103,7 @@ def calc_cores_and_time_needed(onnx_graph, node):
             8 /
             cp.global_memory_bandwidth)  # todo 输入输出带宽要不要对半分？
 
+        # print(cores_needed, C_out, cp.channels_on_a_core)
         return cores_needed, time_needed, load_time_needed
 
     raise Exception('you must be joking, this is NOT a conv op')
@@ -130,26 +131,28 @@ A---B---C---D---E
 
 
 def calc_best_strategy_on_chip(
-        conv_node_re_id,
+        nodes_re_id,
         re_id_graph,
         re_id_rev_graph,
         re_id_graph_edgeset,  # 一个dict，key是一个二元组描述一条边，编号是conv重编号。value是边上数据的shape
         re_id_to_node_id,
         onnx_graph):
 
+    # print("-------------------lets go--------------------")
+
     allnodescnt = len(re_id_graph)
-    in_conv_node_re_id = [0] * allnodescnt
-    for i in conv_node_re_id:
-        in_conv_node_re_id[i] = 1
-    nodecnt = len(conv_node_re_id)
+    in_nodes_re_id = [0] * allnodescnt
+    for i in nodes_re_id:
+        in_nodes_re_id[i] = 1
+    nodecnt = len(nodes_re_id)
     pattern_pos_lists = cp.pattern_pos_lists
 
     # 先确定往pattern上放的顺序
-    chain_list = split_to_chain(conv_node_re_id, re_id_graph_edgeset)
-    conv_node_re_id = []
+    chain_list = split_to_chain(nodes_re_id, re_id_graph_edgeset)
+    nodes_re_id = []
     communicate_on_chip = dict()
     for chain in chain_list:
-        conv_node_re_id += chain
+        nodes_re_id += chain
         # 顺便确定哪些关系用片上通信，哪些用片外
         for i in range(len(chain) - 1):
             communicate_on_chip[(chain[i], chain[i + 1])] = True
@@ -158,7 +161,7 @@ def calc_best_strategy_on_chip(
     time_needed_list = []
     load_time_needed_all = 0
 
-    for node_re_id in conv_node_re_id:
+    for node_re_id in nodes_re_id:
         node = onnx_graph.node[re_id_to_node_id[node_re_id]]
         cores_needed, time_needed, load_time_needed = calc_cores_and_time_needed(
             onnx_graph, node)
@@ -166,8 +169,14 @@ def calc_best_strategy_on_chip(
         time_needed_list.append(time_needed)
         load_time_needed_all += load_time_needed
 
-    best_time_all_patterns=math.inf
-    best_allocation_all_patterns=None
+    # print("nodes_re_id:" + str(nodes_re_id))
+    # print("cores_needed_list:" + str(cores_needed_list))
+    # print("time_needed_list:" + str(time_needed_list))
+    # print("load_time_needed_all:" + str(load_time_needed_all))
+    # print(re_id_graph_edgeset)
+
+    best_time_all_patterns = math.inf
+    best_allocation_all_patterns = None
     for pattern_pos_list in pattern_pos_lists:
         duplicate_times = [1] * nodecnt
 
@@ -176,7 +185,7 @@ def calc_best_strategy_on_chip(
             assert len(pattern_pos_list) == cp.C
 
             # 先看节点够不够
-            if sum([cores_needed[i] * duplicate_times[i]
+            if sum([cores_needed_list[i] * duplicate_times[i]
                    for i in range(nodecnt)]) > cp.C:
                 return None
 
@@ -186,7 +195,7 @@ def calc_best_strategy_on_chip(
                 alloc = []
                 for _ in range(duplicate_times[i]):
                     alc = []
-                    for __ in range(cores_needed[i]):
+                    for __ in range(cores_needed_list[i]):
                         alc.append(pattern_pos_list[j])
                         j += 1
                     alloc.append(alc)
@@ -208,32 +217,39 @@ def calc_best_strategy_on_chip(
             # 计算节点间的通信负载
 
             def add_load_sender(i, k, shape):
+                nonlocal chip_node_load
                 sender = k % duplicate_times[i]
                 channelcnt = shape[1]
+                assert len(allocation[i][sender]) == cores_needed_list[i]
                 for core in allocation[i][sender]:
                     use_channel = min(
                         channelcnt, cp.channels_on_a_core)
                     chip_node_load[core[0]][core[1]] += use_channel * \
                         shape[2] * shape[3] * cp.activation_width // 8  # 转Byte
                     channelcnt -= use_channel
+
                 assert channelcnt == 0
 
             def add_load_receiver(j, k, shape):
+                nonlocal chip_node_load
                 receiver = k % duplicate_times[j]
-                for core in allocation[i][receiver]:
+                for core in allocation[j][receiver]:
                     chip_node_load[core[0]][core[1]] += shape[1] * \
                         shape[2] * shape[3] * cp.activation_width // 8
 
             def add_load_global(shape):
+                nonlocal global_memory_load
                 global_memory_load += shape[1] * shape[2] * \
                     shape[3] * cp.activation_width // 8
+                # print(shape)
 
             for i in range(nodecnt):
                 for j in range(nodecnt):
-                    shape = re_id_graph_edgeset[(
-                        conv_node_re_id[i], conv_node_re_id[j])]
-                    if shape is None:
+                    if (nodes_re_id[i], nodes_re_id[j]
+                            ) not in re_id_graph_edgeset:
                         continue
+                    shape = re_id_graph_edgeset[(
+                        nodes_re_id[i], nodes_re_id[j])]
                     # 有batch_size个batch，
                     # 发送方权重复制了duplicate_times[i]次
                     # 接收方权重复制了duplicate_times[j]次
@@ -247,14 +263,20 @@ def calc_best_strategy_on_chip(
                         add_load_receiver(j, k, shape)
 
                         # 如果不是片上通信，不仅要考虑上述一边的发和一边的收，还要考虑global的一读一写
-                        if communicate_on_chip[(
-                                conv_node_re_id[i], conv_node_re_id[j])] is None:
+                        if (nodes_re_id[i],
+                                nodes_re_id[j]) not in communicate_on_chip:
                             add_load_global(shape)
                             add_load_global(shape)  # 一读一写，两遍
+                            # print('global communication',
+                            #       onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].name,
+                            #       onnx_graph.node[re_id_to_node_id[nodes_re_id[j]]].name)
+                            # print('global communication', i, j)
+
                         # 如果是片上通信，要统计开销最大的
                         else:
                             sender = k % duplicate_times[i]
                             receiver = k % duplicate_times[j]
+                            channelcnt = shape[1]
                             for icore in allocation[i][sender]:
                                 use_channel = min(
                                     channelcnt, cp.channels_on_a_core)
@@ -266,28 +288,28 @@ def calc_best_strategy_on_chip(
                                         shape[3] *
                                         cp.activation_width //
                                         8 *
-                                        (math.abs(icore[0] - jcore[0]) + math.abs(icore[1] - jcore[1]))
+                                        (math.fabs(icore[0] - jcore[0]) + math.fabs(icore[1] - jcore[1]))
                                     )
                                 channelcnt -= use_channel
 
              # 计算节点输入负载
             for i in range(nodecnt):
-                for j in re_id_rev_graph[conv_node_re_id[i]]:
-                    if in_conv_node_re_id[j] == 1:
+                for j in re_id_rev_graph[nodes_re_id[i]]:
+                    if in_nodes_re_id[j] == 1:
                         continue
                     # j->i
-                    shape = re_id_graph_edgeset[(j, conv_node_re_id[i])]
-                    assert shape is not None, 'shape should not be None when calculating input load'
+                    shape = re_id_graph_edgeset[(j, nodes_re_id[i])]
 
                     for k in range(cp.batch_size):
                         # i是接收方，从global读
                         add_load_receiver(i, k, shape)
                         add_load_global(shape)
+                        # print("read from global",i)
 
                 # 还要讨论，有可能这是第一个节点
                 flag = False
                 data_name = onnx_graph.input[0].name
-                node = onnx_graph.node[re_id_to_node_id[conv_node_re_id[i]]]
+                node = onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]]
                 for input_name in node.input:
                     if input_name == data_name:
                         flag = True
@@ -297,31 +319,42 @@ def calc_best_strategy_on_chip(
                     for k in range(cp.batch_size):
                         add_load_receiver(i, k, shape)
                         add_load_global(shape)
+                        # print("read from global",i)
 
             # 计算节点输出负载
             for i in range(nodecnt):
                 flag = False
-                for j in re_id_graph[conv_node_re_id[i]]:
-                    if in_conv_node_re_id[j] == 0:
+                shape = None
+                for j in re_id_graph[nodes_re_id[i]]:
+                    if in_nodes_re_id[j] == 0:
                         flag = True
+                        shape = re_id_graph_edgeset[(nodes_re_id[i], j)]
                         break
                 # 存在某个节点要用这个节点的输入，并且不再当前这个stage里面，说明需要把这个点写出去
                 if flag:
                     for k in range(cp.batch_size):
                         add_load_sender(i, k, shape)
                         add_load_global(shape)
+                        # print("write to global",i)
 
+            # print(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
+            #       math.ceil(global_memory_load / cp.global_memory_bandwidth),
+            #       math.ceil(most_expensive_request / cp.B))
             communication_time = max(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
-                                     math.ceil(global_memory_load / cp.B),
+                                     math.ceil(global_memory_load / cp.global_memory_bandwidth),
                                      math.ceil(most_expensive_request / cp.B))
+
             return calc_time_list, communication_time + \
                 max(calc_time_list) + load_time_needed_all
 
         best_time = math.inf
         best_allocation = None
+        # print("\ntry a new pattern:")
         while True:
+            # print("new loop")
             allocation = put_nodes_on_chip(duplicate_times)
             calc_time_list, cur_time = get_cost_for_an_allocation(allocation)
+
             if cur_time > best_time:
                 break
             best_allocation = allocation
@@ -329,22 +362,36 @@ def calc_best_strategy_on_chip(
             calc_time_list_id = [(v, i) for i, v in enumerate(calc_time_list)]
             calc_time_list_id.sort()
             calc_time_list_id.reverse()
-            used_core_num = sum([cores_needed[i] * duplicate_times[i]
-                               for i in range(nodecnt)])
+            used_core_num = sum([cores_needed_list[i] * duplicate_times[i]
+                                 for i in range(nodecnt)])
             j = 0
-            assert(len(calc_time_list_id)==nodecnt)
+            assert (len(calc_time_list_id) == nodecnt)
             while j < nodecnt:
-                if used_core_num+cores_needed[calc_time_list_id[j][1]] <= cp.C:
+                if duplicate_times[calc_time_list_id[j][1]] + 1 <= cp.batch_size and used_core_num + \
+                        cores_needed_list[calc_time_list_id[j][1]] <= cp.C:
                     duplicate_times[calc_time_list_id[j][1]] += 1
                     break
-                else :
-                    j+=1
-            
-            if j==nodecnt:
+                else:
+                    j += 1
+
+            if j == nodecnt:
                 break
-        if best_time<best_time_all_patterns:
-            best_time_all_patterns=best_time
-            best_allocation_all_patterns=best_allocation
-    
+        # print(cores_needed_list)
+        # print(duplicate_times)
+        # print([cores_needed_list[i] * duplicate_times[i]
+        #       for i in range(nodecnt)])
+        # print(sum([cores_needed_list[i] * duplicate_times[i]
+        #       for i in range(nodecnt)]))
+        # print(calc_time_list)
+        # print(f"calc time: {max(calc_time_list)}")
+        # print(f"communication time: {cur_time - max(calc_time_list)}")
+        # print()
+        if best_time < best_time_all_patterns:
+            best_time_all_patterns = best_time
+            best_allocation_all_patterns = best_allocation
+
+    # print([[onnx_graph.node[re_id_to_node_id[i]].name for i in _]
+    #       for _ in chain_list])
+
     return best_time_all_patterns, best_allocation_all_patterns
 # 注意！传进来的nodes已经重新排序了！

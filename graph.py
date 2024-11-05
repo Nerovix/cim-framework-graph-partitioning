@@ -168,7 +168,6 @@ def split_to_chain(conv_node_re_id, re_id_graph_edgeset):
         for i in range(nodecnt):
             if not used[i]:
                 if ed==-1 or dis[i]>dis[ed]:
-                    print(ed,i)
                     ed=i
         m=dis[ed]
         chain=[]
