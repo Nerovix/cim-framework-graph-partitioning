@@ -40,6 +40,8 @@ def calc_cores_and_time_needed(onnx_graph, node):
         [N, C_in, H, W] = get_tensor_shape(onnx_graph, node.input[0])
         [C_out, C_in, K_h, K_w] = get_tensor_shape(onnx_graph, node.input[1])
 
+        group = [attr.i for attr in node.attribute if attr.name == 'group'][0]
+
         if C_in == 1:
             raise Exception(
                 "whhhaaaat??? this seems to be a depthwise conv and shouldn't be considered here!")
@@ -93,14 +95,13 @@ def calc_cores_and_time_needed(onnx_graph, node):
             duplicate_times)
 
         # 把weight load上去需要的时间
-        # /8转化为Byte
         load_time_needed = math.ceil(
             C_out *
             C_in *
             K_h *
             K_w *
             cp.weight_width /
-            8 /
+            8 /  # 除8转Byte
             cp.global_memory_bandwidth)  # todo 输入输出带宽要不要对半分？
 
         # print(cores_needed, C_out, cp.channels_on_a_core)
@@ -136,6 +137,8 @@ def calc_best_strategy_on_chip(
         re_id_rev_graph,
         re_id_graph_edgeset,  # 一个dict，key是一个二元组描述一条边，编号是conv重编号。value是边上数据的shape
         re_id_to_node_id,
+        input_data_conv_node_re_id,
+        output_data_conv_node_re_id,
         onnx_graph):
 
     # print("-------------------lets go--------------------")
@@ -159,7 +162,7 @@ def calc_best_strategy_on_chip(
 
     cores_needed_list = []
     time_needed_list = []
-    load_time_needed_all = 0
+    load_time_needed_all = 0  # 这里一个算子只算一份，假装可以广播
 
     for node_re_id in nodes_re_id:
         node = onnx_graph.node[re_id_to_node_id[node_re_id]]
@@ -233,9 +236,9 @@ def calc_best_strategy_on_chip(
             def add_load_receiver(j, k, shape):
                 nonlocal chip_node_load
                 receiver = k % duplicate_times[j]
-                for core in allocation[j][receiver]:
-                    chip_node_load[core[0]][core[1]] += shape[1] * \
-                        shape[2] * shape[3] * cp.activation_width // 8
+                core = allocation[j][receiver][0]  # 挑一个发，然后内部传
+                chip_node_load[core[0]][core[1]] += shape[1] * \
+                    shape[2] * shape[3] * cp.activation_width // 8
 
             def add_load_global(shape):
                 nonlocal global_memory_load
@@ -280,16 +283,17 @@ def calc_best_strategy_on_chip(
                             for icore in allocation[i][sender]:
                                 use_channel = min(
                                     channelcnt, cp.channels_on_a_core)
-                                for jcore in allocation[j][receiver]:
-                                    most_expensive_request = max(
-                                        most_expensive_request,
-                                        use_channel *
-                                        shape[2] *
-                                        shape[3] *
-                                        cp.activation_width //
-                                        8 *
-                                        (math.fabs(icore[0] - jcore[0]) + math.fabs(icore[1] - jcore[1]))
-                                    )
+                                # 挑一个发，然后内部传
+                                jcore = allocation[j][receiver][0]
+                                most_expensive_request = max(
+                                    most_expensive_request,
+                                    use_channel *
+                                    shape[2] *
+                                    shape[3] *
+                                    cp.activation_width //
+                                    8 *
+                                    (math.fabs(icore[0] - jcore[0]) + math.fabs(icore[1] - jcore[1]))
+                                )
                                 channelcnt -= use_channel
 
              # 计算节点输入负载
@@ -307,15 +311,10 @@ def calc_best_strategy_on_chip(
                         # print("read from global",i)
 
                 # 还要讨论，有可能这是第一个节点
-                flag = False
-                data_name = onnx_graph.input[0].name
-                node = onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]]
-                for input_name in node.input:
-                    if input_name == data_name:
-                        flag = True
-                        break
-                if flag:
-                    shape = get_tensor_shape(onnx_graph, data_name)
+                if nodes_re_id[i] in input_data_conv_node_re_id:
+                    shape = input_data_conv_node_re_id[nodes_re_id[i]]
+                    onnx_graph.input[0].name
+                    # print(shape)
                     for k in range(cp.batch_size):
                         add_load_receiver(i, k, shape)
                         add_load_global(shape)
@@ -331,7 +330,9 @@ def calc_best_strategy_on_chip(
                         shape = re_id_graph_edgeset[(nodes_re_id[i], j)]
                         break
                 # 存在某个节点要用这个节点的输入，并且不再当前这个stage里面，说明需要把这个点写出去
-                if flag:
+                if flag or nodes_re_id[i] in output_data_conv_node_re_id:
+                    if shape is None:
+                        shape = output_data_conv_node_re_id[nodes_re_id[i]]
                     for k in range(cp.batch_size):
                         add_load_sender(i, k, shape)
                         add_load_global(shape)
@@ -383,15 +384,23 @@ def calc_best_strategy_on_chip(
         # print(sum([cores_needed_list[i] * duplicate_times[i]
         #       for i in range(nodecnt)]))
         # print(calc_time_list)
+        # print(f"best time: {best_time}")
+        # print(f"cur time: {cur_time}")
         # print(f"calc time: {max(calc_time_list)}")
-        # print(f"communication time: {cur_time - max(calc_time_list)}")
-        # print()
+        # print(
+        #     f"communication time: {
+        #         cur_time -
+        #         max(calc_time_list) -
+        #         load_time_needed_all}")
+        # print(f"load time: {load_time_needed_all}")
         if best_time < best_time_all_patterns:
             best_time_all_patterns = best_time
             best_allocation_all_patterns = best_allocation
 
     # print([[onnx_graph.node[re_id_to_node_id[i]].name for i in _]
     #       for _ in chain_list])
-
+    # print(
+    #     "---------------------------------------------------------",
+    #     best_time_all_patterns)
     return best_time_all_patterns, best_allocation_all_patterns
 # 注意！传进来的nodes已经重新排序了！

@@ -17,10 +17,10 @@ if __name__ == "__main__":
 
     # onnx_file_path = "./model_files/bvlcalexnet-12-qdq.onnx"
     # onnx_file_path = "./model_files/mobilenetv2-12-qdq.onnx"
-    onnx_file_path = "./model_files/resnet50-v1-12-qdq.onnx"
-    # onnx_file_path = "./model_files/resnet18-v1-.7.onnx"
+    # onnx_file_path = "./model_files/resnet50-v1-12-qdq.onnx"
+    # onnx_file_path = "./model_files/resnet18-v1-7.onnx"
     # onnx_file_path = "./model_files/vgg16-12-qdq.onnx"
-    # onnx_file_path = "./model_files/efficientnet-lite4-11-qdq.onnx"
+    onnx_file_path = "./model_files/efficientnet-lite4-11-qdq.onnx"
     
     
     
@@ -36,14 +36,15 @@ if __name__ == "__main__":
             model_name='resnet'
         elif onnx_file_path.lower().find('vgg')!=-1:
             model_name='vgg'
-    
+        elif onnx_file_path.lower().find('efficientnet')!=-1:
+            model_name='efficientnet'
     assert model_name != '', 'Model name is required.'
     
     
     print_graph_nodes(onnx_graph)
 
-    if model_name=='alexnet' or model_name=='vgg' or model_name=='resnet':
-        process_alexnet_vgg(onnx_graph)
+    # if model_name=='alexnet' or model_name=='vgg' or model_name=='resnet':
+    process_alexnet_vgg(onnx_graph)
         
 
         
