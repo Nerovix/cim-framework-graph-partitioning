@@ -236,9 +236,10 @@ def calc_best_strategy_on_chip(
             def add_load_receiver(j, k, shape):
                 nonlocal chip_node_load
                 receiver = k % duplicate_times[j]
-                core = allocation[j][receiver][0]  # 挑一个发，然后内部传
-                chip_node_load[core[0]][core[1]] += shape[1] * \
-                    shape[2] * shape[3] * cp.activation_width // 8
+                core = allocation[j][receiver][0]
+                for core in allocation[j][receiver][0]:
+                    chip_node_load[core[0]][core[1]] += shape[1] * \
+                        shape[2] * shape[3] * cp.activation_width // 8
 
             def add_load_global(shape):
                 nonlocal global_memory_load
@@ -249,7 +250,7 @@ def calc_best_strategy_on_chip(
             for i in range(nodecnt):
                 for j in range(nodecnt):
                     if (nodes_re_id[i], nodes_re_id[j]
-                            ) not in re_id_graph_edgeset:
+                        ) not in re_id_graph_edgeset:
                         continue
                     shape = re_id_graph_edgeset[(
                         nodes_re_id[i], nodes_re_id[j])]
@@ -284,7 +285,10 @@ def calc_best_strategy_on_chip(
                                 use_channel = min(
                                     channelcnt, cp.channels_on_a_core)
                                 # 挑一个发，然后内部传
-                                jcore = allocation[j][receiver][0]
+                                maxdis=-math.inf
+                                for jcore in allocation[j][receiver]:
+                                    maxdis=max(maxdis, (math.fabs(icore[0] - jcore[0]) + math.fabs(icore[1] - jcore[1])))
+
                                 most_expensive_request = max(
                                     most_expensive_request,
                                     use_channel *
@@ -292,7 +296,7 @@ def calc_best_strategy_on_chip(
                                     shape[3] *
                                     cp.activation_width //
                                     8 *
-                                    (math.fabs(icore[0] - jcore[0]) + math.fabs(icore[1] - jcore[1]))
+                                    maxdis
                                 )
                                 channelcnt -= use_channel
 
