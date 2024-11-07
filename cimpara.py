@@ -1,8 +1,9 @@
 configs = [(),
-           (16, 8, 32, 8, 16, 16, 512, 144, 16, 12, 12, 64),]
+           (16, 8, 32, 8, 16, 8, 512, 64, 16, 8, 8, 64),]
 config_id = 1
-m, n, H, W, T, K, local_memory_size, C, B, P, Q, global_memory_bandwidth = configs[config_id]
-batch_size=8
+m, n, H, W, T, K, local_memory_size, C, B, P, Q, global_memory_bandwidth = configs[
+    config_id]
+batch_size = 8
 
 weight_width = 8  # width of weights
 activation_width = 8  # width of activation values
@@ -10,6 +11,49 @@ activation_width = 8  # width of activation values
 
 # 每个核能计算的channel_out数量：每个macro的计算能力*每个macro group包含K个macro
 channels_on_a_core = n * W // weight_width * K
+
+pattern_maps_64 = [
+    [   # S-snake
+        [0, 1, 2, 3, 4, 5, 6, 7],
+        [15, 14, 13, 12, 11, 10, 9, 8],
+        [16, 17, 18, 19, 20, 21, 22, 23],
+        [31, 30, 29, 28, 27, 26, 25, 24],
+        [32, 33, 34, 35, 36, 37, 38, 39],
+        [47, 46, 45, 44, 43, 42, 41, 40],
+        [48, 49, 50, 51, 52, 53, 54, 55],
+        [63, 62, 61, 60, 59, 58, 57, 56],
+    ],
+    [   # 2 sides
+        [3, 2, 1, 0, 63, 62, 61, 60],
+        [4, 5, 6, 7, 56, 57, 58, 59],
+        [11, 10, 9, 8, 55, 54, 53, 52],
+        [12, 13, 14, 15, 48, 49, 50, 51],
+        [19, 18, 17, 16, 47, 46, 45, 44],
+        [20, 21, 22, 23, 40, 41, 42, 43],
+        [27, 26, 25, 24, 39, 38, 37, 36],
+        [28, 29, 30, 31, 32, 33, 34, 35],
+    ],
+    [   # broken snake of snakes
+        [0, 3, 4, 7, 8, 11, 12, 15],
+        [1, 2, 5, 6, 9, 10, 13, 14],
+        [31, 28, 27, 24, 23, 20, 19, 16],
+        [30, 29, 26, 25, 22, 21, 18, 17],
+        [32, 35, 36, 39, 40, 43, 44, 47],
+        [33, 34, 37, 38, 41, 42, 45, 46],
+        [63, 60, 59, 56, 55, 52, 51, 48],
+        [62, 61, 58, 57, 54, 53, 50, 49],
+    ],
+    [   # drunk snake
+        [0, 3, 4, 5, 58, 59, 60, 63],
+        [1, 2, 7, 6, 57, 56, 61, 62],
+        [14, 13, 8, 9, 54, 55, 50, 49],
+        [15, 12, 11, 10, 53, 52, 51, 48],
+        [16, 17, 30, 31, 32, 33, 46, 47],
+        [19, 18, 29, 28, 35, 34, 45, 44],
+        [20, 23, 24, 27, 36, 39, 40, 43],
+        [21, 22, 25, 26, 37, 38, 41, 42],
+    ],
+]
 
 pattern_maps_144 = [
     [   # S-snake
@@ -73,7 +117,7 @@ pattern_maps_144 = [
 
 pattern_maps = []
 if C == 64:
-    pass
+    pattern_maps = pattern_maps_64
 elif C == 144:
     pattern_maps = pattern_maps_144
 
@@ -88,3 +132,4 @@ for pattern_map in pattern_maps:
     pattern_pos_lists.append(pos_lists)
 
 # print(pattern_pos_lists[1])
+

@@ -4,7 +4,7 @@ from read_file import get_tensor_shape
 import math
 
 
-def process_alexnet_vgg(onnx_graph):
+def process(onnx_graph):
     graph = build_graph(onnx_graph)
 
     is_conv_node = []
@@ -89,24 +89,10 @@ def process_alexnet_vgg(onnx_graph):
     #     print([re_id_to_node_id[i] for i in range(conv_node_cnt) if prefix >> i & 1 == 1])
     # print([i for i in range(conv_node_cnt) if prefix >> i & 1 == 1])
 
-    # s=[40,41,42,43,44,45,46,47,48,49,50,51,52]
     # s=[0,1,2,3,4]
     # cost_a, alloc = calc_best_strategy_on_chip(s, re_id_graph, re_id_rev_graph, re_id_graph_edgeset,
-    #                                            re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
-    
-    # s = [48,49,50,51]
-    # cost_a, alloc = calc_best_strategy_on_chip(s, re_id_graph, re_id_rev_graph, re_id_graph_edgeset,
-    #                                            re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
-
-    # s = [52]
-    # cost_b, alloc = calc_best_strategy_on_chip(s, re_id_graph, re_id_rev_graph, re_id_graph_edgeset,
-    #                                            re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
-
-    # s = [48,49,50,51,52]
-    # cost_c, alloc = calc_best_strategy_on_chip(s, re_id_graph, re_id_rev_graph, re_id_graph_edgeset,
-    #                                            re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
-
-    # print(cost_a, cost_b, cost_c)
+    # re_id_to_node_id, input_data_conv_node_re_id,
+    # output_data_conv_node_re_id, onnx_graph)
 
     # print(onnx_graph.input[0].name)
     # print(input_data_conv_node_re_id)
@@ -124,8 +110,8 @@ def process_alexnet_vgg(onnx_graph):
             dpf[i] = -1
             continue
         for j, jprefix in enumerate(prefixes_bitmask_re_id):
-            if i > 0 and j < dpf[i - 1]:
-                continue
+            # if i > 0 and j < dpf[i - 1]:
+            # continue
             if i != j and iprefix & jprefix == jprefix:
                 print("dp", i, iprefix, j, jprefix)
                 if dp[j] == math.inf:
@@ -133,12 +119,12 @@ def process_alexnet_vgg(onnx_graph):
                 s = iprefix - jprefix
                 s = [i for i in range(conv_node_cnt) if s >> i & 1 == 1]
                 # s 里面是按照conv重编号的
-                cost, alloc = calc_best_strategy_on_chip(
-                    s, re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id,input_data_conv_node_re_id,output_data_conv_node_re_id, onnx_graph)
+                cost, alloc, nodes_re_id, cores_needed_list= calc_best_strategy_on_chip(
+                    s, re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
                 if dp[j] + cost < dp[i]:
                     dp[i] = dp[j] + cost
                     dpf[i] = j
-                    dpalloc[i] = alloc
+                    dpalloc[i] = (alloc,nodes_re_id,cores_needed_list)
 
         print(dpf[i])
 
@@ -147,8 +133,10 @@ def process_alexnet_vgg(onnx_graph):
     while prefixes_bitmask_re_id[u] != 0:
         stage = []
         v = dpf[u]
-        stages.append([i for i in range(conv_node_cnt) if (
-            prefixes_bitmask_re_id[u] - prefixes_bitmask_re_id[v]) >> i & 1 == 1])
+        alloc,nodes_re_id,cores_needed_list = dpalloc[u]
+        for i in range(len(alloc)):
+            stage.append(f"{nodes_re_id[i]}-{cores_needed_list[i]}-{len(alloc[i])}")        
+        stages.append(stage)
         u = v
 
     stages.reverse()

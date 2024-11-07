@@ -41,6 +41,7 @@ def calc_cores_and_time_needed(onnx_graph, node):
         [C_out, C_in, K_h, K_w] = get_tensor_shape(onnx_graph, node.input[1])
 
         group = [attr.i for attr in node.attribute if attr.name == 'group'][0]
+        assert group == 1, "jesus, depthwise separable conv is too advanced for my shitty stupid code"
 
         if C_in == 1:
             raise Exception(
@@ -55,9 +56,9 @@ def calc_cores_and_time_needed(onnx_graph, node):
         if not P:
             P = [0, 0, 0, 0]
 
-        # print("conv layer:")
-        # print("[N, C_in, H, W]" + str([N, C_in, H, W]))
-        # print("[C_out, C_in, K_h, K_w] " + str([C_out, C_in, K_h, K_w]))
+        print("conv layer:")
+        print("[N, C_in, H, W]" + str([N, C_in, H, W]))
+        print("[C_out, C_in, K_h, K_w] " + str([C_out, C_in, K_h, K_w]))
         # print("S" + str(S))
         # print("P" + str(P))
 
@@ -78,8 +79,12 @@ def calc_cores_and_time_needed(onnx_graph, node):
         # 因此放下一个channel_out需要ceil(K_h * K_w * C_in  / (H * m))个macro group
         # 因此能放下floor(T/ceil(...))次权重复制
         duplicate_times = cp.T // math.ceil(K_h * K_w * C_in / (cp.H * cp.m))
+        print('duplicate times:', duplicate_times)
 
         cores_needed = math.ceil(C_out / cp.channels_on_a_core)
+        print(C_out, cp.channels_on_a_core)
+        print('cores needed:', cores_needed)
+
 
         # 需要计算周期：img2col之后有H_out * W_out次输入
         # 每m * activation_width周期可以计算一次
@@ -137,11 +142,11 @@ def calc_best_strategy_on_chip(
         re_id_rev_graph,
         re_id_graph_edgeset,  # 一个dict，key是一个二元组描述一条边，编号是conv重编号。value是边上数据的shape
         re_id_to_node_id,
-        input_data_conv_node_re_id,
-        output_data_conv_node_re_id,
+        input_data_conv_node_re_id,  # 外层提前整理好的，需要直接从图片读数据的第一个节点的conv重编号
+        output_data_conv_node_re_id,  # 外层提前整理好的，需要写数据给global，给后面的fc用的节点的conv重编号
         onnx_graph):
 
-    # print("-------------------lets go--------------------")
+    print("-------------------lets go--------------------")
 
     allnodescnt = len(re_id_graph)
     in_nodes_re_id = [0] * allnodescnt
@@ -172,11 +177,18 @@ def calc_best_strategy_on_chip(
         time_needed_list.append(time_needed)
         load_time_needed_all += load_time_needed
 
-    # print("nodes_re_id:" + str(nodes_re_id))
-    # print("cores_needed_list:" + str(cores_needed_list))
-    # print("time_needed_list:" + str(time_needed_list))
-    # print("load_time_needed_all:" + str(load_time_needed_all))
-    # print(re_id_graph_edgeset)
+    # 先特判：直接就放不下
+    if sum(cores_needed_list) > cp.C:
+        return math.inf, None, None, None
+
+    print("nodes_re_id:" + str(nodes_re_id))
+    print("cores_needed_list:" + str(cores_needed_list))
+    print("time_needed_list:" + str(time_needed_list))
+    print("load_time_needed_all:" + str(load_time_needed_all))
+    print(re_id_graph_edgeset)
+
+    def calc_dis(core0, core1):
+        return math.fabs(core0[0] - core1[0]) + math.fabs(core0[1] - core1[1])
 
     best_time_all_patterns = math.inf
     best_allocation_all_patterns = None
@@ -217,6 +229,9 @@ def calc_best_strategy_on_chip(
             most_expensive_request = 0
             chip_node_load = [[0] * cp.Q for _ in range(cp.P)]
             global_memory_load = 0
+            cluster_internel_communication_cost = [
+                [0] * len(allocation[i]) for i in range(len(allocation))]
+
             # 计算节点间的通信负载
 
             def add_load_sender(i, k, shape):
@@ -233,13 +248,65 @@ def calc_best_strategy_on_chip(
 
                 assert channelcnt == 0
 
-            def add_load_receiver(j, k, shape):
+            def add_load_receiver(j, k, shape, is_from_global):
                 nonlocal chip_node_load
+                nonlocal cluster_internel_communication_cost
                 receiver = k % duplicate_times[j]
-                core = allocation[j][receiver][0]
-                for core in allocation[j][receiver][0]:
-                    chip_node_load[core[0]][core[1]] += shape[1] * \
-                        shape[2] * shape[3] * cp.activation_width // 8
+                # 用来暂时累加每个接收核受到的数据量
+                accumulate_load = [0] * len(allocation[j][receiver])
+                if not is_from_global:
+                    # 来自其他节点，就按照每个来源往上一个个轮盘累加
+                    p = 0
+                    channelcnt = shape[1]
+                    while channelcnt > 0:
+                        use_channel = min(
+                            channelcnt, cp.channels_on_a_core)
+                        accumulate_load[p] += use_channel * \
+                            shape[2] * shape[3] * cp.activation_width // 8
+                        p = (p + 1) % len(accumulate_load)
+                        channelcnt -= use_channel
+                else:
+                    # 来自global，可以自己尽可能均匀地划分
+                    remainder = shape[1] % len(accumulate_load)
+                    for i in range(len(accumulate_load)):
+                        use_channel = shape[1] // len(accumulate_load) + \
+                            max(remainder, 1)
+                        accumulate_load[i] += use_channel * \
+                            shape[2] * shape[3] * cp.activation_width // 8
+                        remainder -= max(remainder, 1)
+
+                circle_dis = 0
+                for p in range(len(accumulate_load)):
+                    core = allocation[j][receiver][p]
+                    chip_node_load[core[0]][core[1]] += accumulate_load[p]
+                    circle_dis += calc_dis(allocation[j][receiver][p], allocation[j][receiver][(
+                        p + 1) % len(accumulate_load)])  # 难绷长难句之计算环路通信长度
+
+                cluster_internel_communication_cost[j][receiver] += math.ceil(
+                    circle_dis * max(accumulate_load) / cp.B)
+
+            def update_most_expensive_request(i, j, k, shape):
+                nonlocal most_expensive_request
+                sender = k % duplicate_times[i]
+                receiver = k % duplicate_times[j]
+                channelcnt = shape[1]
+                for icoreid, icore in enumerate(allocation[i][sender]):
+                    use_channel = min(
+                        channelcnt, cp.channels_on_a_core)
+                    # 挑一个发，然后内部传
+                    jcoreid = icoreid % len(allocation[j][receiver])
+                    jcore = allocation[j][receiver][jcoreid]
+                    most_expensive_request = max(
+                        most_expensive_request,
+                        use_channel *
+                        shape[2] *
+                        shape[3] *
+                        cp.activation_width //
+                        8 *
+                        (math.fabs(icore[0] - jcore[0]) + math.fabs(icore[1] - jcore[1]))
+                    )
+                    channelcnt -= use_channel
+                assert (channelcnt == 0)
 
             def add_load_global(shape):
                 nonlocal global_memory_load
@@ -250,7 +317,7 @@ def calc_best_strategy_on_chip(
             for i in range(nodecnt):
                 for j in range(nodecnt):
                     if (nodes_re_id[i], nodes_re_id[j]
-                        ) not in re_id_graph_edgeset:
+                            ) not in re_id_graph_edgeset:
                         continue
                     shape = re_id_graph_edgeset[(
                         nodes_re_id[i], nodes_re_id[j])]
@@ -259,69 +326,43 @@ def calc_best_strategy_on_chip(
                     # 接收方权重复制了duplicate_times[j]次
                     # 于是第k个batch(0-based)
                     # 由发送方的第k%duplicate_times[i]个权重复制到接收方的第k%duplicate_times[j]个权重复制
-                    # 然后，累加节点压力的时候，发送方要枚举每个权重复制，接收方枚举每个权重复制的每个节点
                     for k in range(cp.batch_size):
-                        # 发送方
-                        add_load_sender(i, k, shape)
-                        # 接收方
-                        add_load_receiver(j, k, shape)
 
-                        # 如果不是片上通信，不仅要考虑上述一边的发和一边的收，还要考虑global的一读一写
+                        # 如果通过global读写，不仅要考虑上述一边的发和一边的收，还要考虑global的一读一写
                         if (nodes_re_id[i],
                                 nodes_re_id[j]) not in communicate_on_chip:
+                            add_load_sender(i, k, shape)
                             add_load_global(shape)
                             add_load_global(shape)  # 一读一写，两遍
-                            # print('global communication',
-                            #       onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].name,
-                            #       onnx_graph.node[re_id_to_node_id[nodes_re_id[j]]].name)
-                            # print('global communication', i, j)
+                            add_load_receiver(j, k, shape, True)
 
                         # 如果是片上通信，要统计开销最大的
                         else:
-                            sender = k % duplicate_times[i]
-                            receiver = k % duplicate_times[j]
-                            channelcnt = shape[1]
-                            for icore in allocation[i][sender]:
-                                use_channel = min(
-                                    channelcnt, cp.channels_on_a_core)
-                                # 挑一个发，然后内部传
-                                maxdis=-math.inf
-                                for jcore in allocation[j][receiver]:
-                                    maxdis=max(maxdis, (math.fabs(icore[0] - jcore[0]) + math.fabs(icore[1] - jcore[1])))
+                            add_load_sender(i, k, shape)
+                            add_load_receiver(j, k, shape, False)
+                            update_most_expensive_request(i, j, k, shape)
 
-                                most_expensive_request = max(
-                                    most_expensive_request,
-                                    use_channel *
-                                    shape[2] *
-                                    shape[3] *
-                                    cp.activation_width //
-                                    8 *
-                                    maxdis
-                                )
-                                channelcnt -= use_channel
-
-             # 计算节点输入负载
+            # 然后计算节点输入负载
             for i in range(nodecnt):
                 for j in re_id_rev_graph[nodes_re_id[i]]:
                     if in_nodes_re_id[j] == 1:
                         continue
-                    # j->i
+                    # j->nodes_re_id[i]
                     shape = re_id_graph_edgeset[(j, nodes_re_id[i])]
 
                     for k in range(cp.batch_size):
                         # i是接收方，从global读
-                        add_load_receiver(i, k, shape)
                         add_load_global(shape)
-                        # print("read from global",i)
+                        add_load_receiver(i, k, shape, True)
 
-                # 还要讨论，有可能这是第一个节点
+                # 还要讨论，有可能这是第一个节点，直接从图片读数据的
                 if nodes_re_id[i] in input_data_conv_node_re_id:
                     shape = input_data_conv_node_re_id[nodes_re_id[i]]
                     onnx_graph.input[0].name
                     # print(shape)
                     for k in range(cp.batch_size):
-                        add_load_receiver(i, k, shape)
                         add_load_global(shape)
+                        add_load_receiver(i, k, shape, True)
                         # print("read from global",i)
 
             # 计算节点输出负载
@@ -333,7 +374,10 @@ def calc_best_strategy_on_chip(
                         flag = True
                         shape = re_id_graph_edgeset[(nodes_re_id[i], j)]
                         break
-                # 存在某个节点要用这个节点的输入，并且不再当前这个stage里面，说明需要把这个点写出去
+
+                # 存在某个节点要用这个节点的输入，并且不再当前这个stage里面
+                # 或者这是一个外层已经算好了必须写出去的点
+                # 说明需要把这个点写出去
                 if flag or nodes_re_id[i] in output_data_conv_node_re_id:
                     if shape is None:
                         shape = output_data_conv_node_re_id[nodes_re_id[i]]
@@ -348,6 +392,8 @@ def calc_best_strategy_on_chip(
             communication_time = max(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
                                      math.ceil(global_memory_load / cp.global_memory_bandwidth),
                                      math.ceil(most_expensive_request / cp.B))
+            communication_time += max(max(_)
+                                      for _ in cluster_internel_communication_cost)
 
             return calc_time_list, communication_time + \
                 max(calc_time_list) + load_time_needed_all
@@ -401,10 +447,5 @@ def calc_best_strategy_on_chip(
             best_time_all_patterns = best_time
             best_allocation_all_patterns = best_allocation
 
-    # print([[onnx_graph.node[re_id_to_node_id[i]].name for i in _]
-    #       for _ in chain_list])
-    # print(
-    #     "---------------------------------------------------------",
-    #     best_time_all_patterns)
-    return best_time_all_patterns, best_allocation_all_patterns
-# 注意！传进来的nodes已经重新排序了！
+    # 传进来的nodes已经重新排序了，所以重新传回去
+    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list

@@ -20,6 +20,10 @@ def get_instrctions_for_a_stage(
         # dict套list，表示一个tensor被哪些节点使用，
         onnx_graph):
 
+    in_nodes_re_id=[0]*len(graph)
+    for i in nodes_re_id:
+        in_nodes_re_id[i]=1
+
     instructions = dict()
     for i in range(cp.P):
         for j in range(cp.Q):
@@ -73,8 +77,8 @@ def get_instrctions_for_a_stage(
                 indeg[y] -= 1
                 if indeg[y] == 0:
                     q.append(y)
-    
-
+#   todotodotodtodo   
+#    !!!先load权重
 
     for k in range(cp.batch_size):
 
@@ -91,11 +95,14 @@ def get_instrctions_for_a_stage(
                 # j->i
                 shape = re_id_graph_edgeset[(j, nodes_re_id[i])]
 
-                for k in range(cp.batch_size):
-                    # i是接收方，从global读
-                    add_load_receiver(i, k, shape)
-                    add_load_global(shape)
-                    # print("read from global",i)
+                receiver=k%len(allocation[i])
+                
+
+                    for k in range(cp.batch_size):
+                        # i是接收方，从global读
+                        add_load_receiver(i, k, shape)
+                        add_load_global(shape)
+                        # print("read from global",i)
 
             # 还要讨论，有可能这是第一个节点
             if nodes_re_id[i] in input_data_conv_node_re_id:
