@@ -1,10 +1,20 @@
 import cimpara as cp
 from collections import deque
+from read_file import get_tensor_shape
+
+import random
+import string
+
+
+def get_unique_id(length=15):
+    letters = string.ascii_lowercase
+    return ''.join(random.choice(letters) for i in range(length))
 
 
 def get_instrctions_for_a_stage(
         allocation,
         nodes_re_id,
+        communicate_on_chip,  # reid为下标的dict，包含所有chip通信关系，不在这上面的要用global通信
         re_id_graph,
         re_id_rev_graph,
         re_id_graph_edgeset,
@@ -20,29 +30,28 @@ def get_instrctions_for_a_stage(
         # dict套list，表示一个tensor被哪些节点使用，
         onnx_graph):
 
-    in_nodes_re_id=[0]*len(graph)
+    in_nodes_re_id = [0] * len(graph)
     for i in nodes_re_id:
-        in_nodes_re_id[i]=1
+        in_nodes_re_id[i] = 1
 
     instructions = dict()
     for i in range(cp.P):
         for j in range(cp.Q):
-            instructions[f"core_{i}_{j}"] = {
-                "cluster_id": -1,
-                "weight_replica_id": -1,
-                "instructions": []
+            instructions[f'core_{i}_{j}'] = {
+                'cluster_id': -1,
+                'weight_replica_id': -1,
+                'instructions': []
             }
 
     for i in range(allocation):
         for j in range(len(allocation[i])):
             for core in allocation[i][j]:
-                instructions[f"core_{core[0]}_{core[1]}"] = {
-                    "cluster_id": onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].name,
-                    "weight_replica_id": j,
-                    "instructions": []
+                instructions[f'core_{core[0]}_{core[1]}'] = {
+                    'cluster_id': onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].name,
+                    'weight_replica_id': j,
+                    'instructions': []
                 }
 
-    nodes = []
     nodes_to_allocation_id = [-1] * len(graph)
     for i in sorted_nodes:
         flag = -1
@@ -50,7 +59,6 @@ def get_instrctions_for_a_stage(
             if re_id_to_node_id[re_id] == belong_node[i]:
                 flag = j
         if flag != -1:
-            nodes.append(i)
             nodes_to_allocation_id[i] = flag
 
     nodecnt = len(nodes_re_id)
@@ -77,43 +85,220 @@ def get_instrctions_for_a_stage(
                 indeg[y] -= 1
                 if indeg[y] == 0:
                     q.append(y)
-#   todotodotodtodo   
+
+
+#   todotodotodtodo
 #    !!!先load权重
+
+    def add_instructions(icores, jcores, shape, tensor_name_prefix):
+        if jcores is None:  # 写到global
+            assert icores is not None, 'wtf global to global wtf is this'
+            channelcnt = shape[1]
+            for icore in icores:
+                use_channel = min(cp.channels_on_a_core, channelcnt)
+                instructions[f'core_{icore[0]}_{icore[1]}']['instructions'].append({
+                    'op': 'write',
+                    'attr': {
+                        'shape': [1, use_channel, shape[2], shape[3]]
+                    }
+                })
+                channelcnt -= use_channel
+            assert channelcnt == 0
+            return
+
+        core_num = len(jcores)
+        accumulate_load_channelcnt = [0] * core_num
+
+        if icores is not None:
+            p = 0
+            channelcnt = shape[1]
+            for q in range(len(icores)):
+                use_channel = min(channelcnt, cp.channels_on_a_core)
+                accumulate_load_channelcnt[p] += use_channel
+                frm = icores[q]
+                to = jcores[p]
+
+                instructions[f'core_{frm[0]}_{frm[1]}']['instructions'].append({
+                    'op': 'send',
+                    'attr': {
+                        'dist_core_name': f'core_{to[0]}_{to[1]}',
+                        'shape': [1, use_channel, shape[2], shape[3]],
+                        'name': tensor_name_prefix + f'_btw_clusters_part_{q}'
+                    }
+                })
+                instructions[f'core_{to[0]}_{to[1]}']['instructions'].append({
+                    'op': 'receive',
+                    'attr': {
+                        'src_core_name': f'core_{frm[0]}_{frm[1]}',
+                        'shape': [1, use_channel, shape[2], shape[3]],
+                        'name': tensor_name_prefix + f'_btw_clusters_part_{q}'
+                    }
+                })
+
+                p = (p + 1) % core_num
+                channelcnt -= use_channel
+        else:
+            remainder = shape[1] % core_num
+            accumulate_load_channelcnt = [0] * core_num
+            for l in range(core_num):
+                use_channel = shape[1] // core_num + \
+                    max(remainder, 1)
+                core = jcores[l]
+                instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
+                    'op': 'read',
+                    'attr': {
+                        'shape': [1, use_channel, shape[2], shape[3]]
+                    }
+                })
+                accumulate_load_channelcnt[l] += use_channel
+                remainder -= max(remainder, 1)
+            # print('read from global',j)
+
+        def add_send_receive(frm, to, src, tensor_name):
+            instructions[f'core_{frm[0]}_{frm[1]}']['instructions'].append({
+                'op': 'send',
+                'attr': {
+                    'dist_core_name': f'core_{to[0]}_{to[1]}',
+                    'shape': [1, accumulate_load_channelcnt[src], shape[2], shape[3]],
+                    'name': tensor_name
+                }
+            })
+            instructions[f'core_{to[0]}_{to[1]}']['instructions'].append({
+                'op': 'receive',
+                'attr': {
+                    'src_core_name': f'core_{frm[0]}_{frm[1]}',
+                    'shape': [1, accumulate_load_channelcnt[src], shape[2], shape[3]],
+                    'name': tensor_name
+                }
+            })
+
+        if core_num % 2 == 0:
+            for round in range(core_num - 1):
+                for bit in range(0, 1):
+                    for src in range(bit, core_num, 2):
+                        if accumulate_load_channelcnt[src] == 0:
+                            continue
+                        frm = (src + round) % core_num
+                        to = (src + round + 1) % core_num
+                        frm = jcores[frm]
+                        to = jcores[to]
+                        tensor_name = tensor_name_prefix + \
+                            f'_in_cluster_part_{src}'
+                        add_send_receive(frm, to, src, tensor_name)
+        else:
+            pos = 0
+            for round in range(core_num - 1):
+                for _ in range(core_num):
+                    frm = pos
+                    to = (pos + 1) % core_num
+                    pos = (pos + 2) % core_num
+                    src = (frm - round + core_num) % core_num
+                    frm = jcores[frm]
+                    to = jcores[to]
+                    tensor_name = tensor_name_prefix + \
+                        f'_in_cluster_part_{src}'
+                    add_send_receive(frm, to, src, tensor_name)
 
     for k in range(cp.batch_size):
 
         for i_topsort_id in range(nodecnt):
-            i=id_topsort[i_topsort_id]
+            i = id_topsort[i_topsort_id]
             # 这里i已经按照拓扑序排了。现在加入指令：
             # 先加入读入数据，再加入计算，再加入输出数据
 
             # ----------读入----------
-            # 只考虑从global读
+            # 只考虑从global读，从其他receive放下面
             for j in re_id_rev_graph[nodes_re_id[i]]:
                 if in_nodes_re_id[j] == 1:
-                    continue
-                # j->i
+                    continue  # 不在此stage
+
                 shape = re_id_graph_edgeset[(j, nodes_re_id[i])]
-
-                receiver=k%len(allocation[i])
-                
-
-                    for k in range(cp.batch_size):
-                        # i是接收方，从global读
-                        add_load_receiver(i, k, shape)
-                        add_load_global(shape)
-                        # print("read from global",i)
+                add_instructions(None,
+                                 allocation[i][k % len(allocation[i])],
+                                 shape,
+                                 get_unique_id())
 
             # 还要讨论，有可能这是第一个节点
             if nodes_re_id[i] in input_data_conv_node_re_id:
                 shape = input_data_conv_node_re_id[nodes_re_id[i]]
-                onnx_graph.input[0].name
-                # print(shape)
-                for k in range(cp.batch_size):
-                    add_load_receiver(i, k, shape)
-                    add_load_global(shape)
-                    # print("read from global",i)
-            
+                add_instructions(None,
+                                 allocation[i][k % len(allocation[i])],
+                                 shape,
+                                 get_unique_id())
+
+            # ----------计算----------
+            in_cluster_nodes = [
+                _ for _ in sorted_nodes if belong_node[_] == re_id_to_node_id[nodes_re_id[i]]]
+            shape = get_tensor_shape( 
+                # 假定挂在这个conv上的节点的操作都跟这个conv输入的大小一样
+                # 这个假定其实不是很科学，但是考虑到相邻的layer的激活值尺寸差别不大，就这么处理了
+                onnx_graph,
+                onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].input[0])
+
+            shape[0] = 1
+            runner = k % len(allocation[i])
+            core_num = allocation[i][runner]
+            for nodeid in in_cluster_nodes:
+                channelcnt = shape[1]
+                for coreid in range(core_num):
+                    use_channel = min(channelcnt, cp.channels_on_a_core)
+                    core = allocation[i][runner][coreid]
+                    channelcnt -= use_channel
+                    op_type = onnx_graph.node[nodeid].op_type
+                    if op_type == 'Conv':
+                        group = [
+                            attr.i for attr in onnx_graph.node[nodeid].attribute if attr.name == 'group'][0]
+                        if group == 1:
+                            X_shape = [1, use_channel, shape[2], shape[3]]
+                            W_shape = get_tensor_shape(
+                                onnx_graph, onnx_graph.node[nodeid].input[1])
+                            W_shape[1] = use_channel
+                            padding = [
+                                attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'pads'][0]
+                            strides = [
+                                attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'strides'][0]
+                            instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
+                                'op': 'conv',
+                                'attr': {
+                                    'X_shape': X_shape,
+                                    'W_shape': W_shape,
+                                    'padding': padding,
+                                    'strides': strides
+                                }
+                            })
+                        else: # depthwise conv
+                            X_shape = [1, use_channel, shape[2], shape[3]]
+                            W_shape = get_tensor_shape(
+                                onnx_graph, onnx_graph.node[nodeid].input[1])
+                            assert W_shape[1] == 1
+                            assert W_shape[0] == shape[1]
+                            W_shape[0] = use_channel
+                            instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
+                                'op': 'depthwise_conv',
+                                'attr': {
+                                    'group': group,
+                                    'X_shape': X_shape,
+                                    'W_shape': W_shape
+                                }
+                            })
+                    elif op_type == 'Add':
+                        instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
+                            'op': 'add',
+                            'attr': {
+                                'shape': [1, use_channel, shape[2], shape[3]]
+                            }
+                        })
+                    elif op_type == 'Relu':
+                        instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
+                            'op': 'relu',
+                            'attr': {
+                                'shape': [1, use_channel, shape[2], shape[3]]
+                            }
+                        })
+                    else:
+                        # unimportant operators, do nothing
+                        pass
+
             # ----------输出----------
             # 向同stage其他节点输出、同stage其他节点的读入
 
@@ -123,58 +308,23 @@ def get_instrctions_for_a_stage(
                     continue
                 shape = re_id_graph_edgeset[(
                     nodes_re_id[i], nodes_re_id[j])]
-                # 有batch_size个batch，
-                # 发送方权重复制了duplicate_times[i]次
-                # 接收方权重复制了duplicate_times[j]次
-                # 于是第k个batch(0-based)
-                # 由发送方的第k%duplicate_times[i]个权重复制到接收方的第k%duplicate_times[j]个权重复制
-                # 然后，累加节点压力的时候，发送方要枚举每个权重复制，接收方枚举每个权重复制的每个节点
-                for k in range(cp.batch_size):
-                    # 发送方
-                    add_load_sender(i, k, shape)
-                    # 接收方
-                    add_load_receiver(j, k, shape)
 
-                    # 如果不是片上通信，不仅要考虑上述一边的发和一边的收，还要考虑global的一读一写
-                    if (nodes_re_id[i],
-                            nodes_re_id[j]) not in communicate_on_chip:
-                        add_load_global(shape)
-                        add_load_global(shape)  # 一读一写，两遍
-                        # print('global communication',
-                        #       onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].name,
-                        #       onnx_graph.node[re_id_to_node_id[nodes_re_id[j]]].name)
-                        # print('global communication', i, j)
-
-                    # 如果是片上通信，要统计开销最大的
-                    else:
-                        sender = k % duplicate_times[i]
-                        receiver = k % duplicate_times[j]
-                        channelcnt = shape[1]
-                        for icore in allocation[i][sender]:
-                            use_channel = min(
-                                channelcnt, cp.channels_on_a_core)
-                            # 挑一个发，然后内部传
-                            maxdis = -math.inf
-                            for jcore in allocation[j][receiver]:
-                                maxdis = max(
-                                    maxdis,
-                                    (math.fabs(
-                                        icore[0] -
-                                        jcore[0]) +
-                                        math.fabs(
-                                        icore[1] -
-                                        jcore[1])))
-
-                            most_expensive_request = max(
-                                most_expensive_request,
-                                use_channel *
-                                shape[2] *
-                                shape[3] *
-                                cp.activation_width //
-                                8 *
-                                maxdis
-                            )
-                            channelcnt -= use_channel
+                if (nodes_re_id[i],
+                        nodes_re_id[j]) in communicate_on_chip:
+                    add_instructions(allocation[i][k % len(allocation[i])],
+                                     allocation[j][k % len(allocation[j])],
+                                     shape,
+                                     get_unique_id())
+                else:
+                    unique_id = get_unique_id()
+                    add_instructions(allocation[i][k % len(allocation[i])],
+                                     None,
+                                     shape,
+                                     unique_id)
+                    add_instructions(None,
+                                     allocation[j][k % len(allocation[j])],
+                                     shape,
+                                     unique_id)
 
             # 向global的输出
             flag = False
@@ -188,17 +338,7 @@ def get_instrctions_for_a_stage(
             if flag or nodes_re_id[i] in output_data_conv_node_re_id:
                 if shape is None:
                     shape = output_data_conv_node_re_id[nodes_re_id[i]]
-                for k in range(cp.batch_size):
-                    add_load_sender(i, k, shape)
-                    add_load_global(shape)
-                    # print("write to global",i)
-
-        # print(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
-        #       math.ceil(global_memory_load / cp.global_memory_bandwidth),
-        #       math.ceil(most_expensive_request / cp.B))
-        communication_time = max(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
-                                 math.ceil(global_memory_load / cp.global_memory_bandwidth),
-                                 math.ceil(most_expensive_request / cp.B))
-
-        return calc_time_list, communication_time + \
-            max(calc_time_list) + load_time_needed_all
+                add_instructions(allocation[i][k % len(allocation[i])],
+                                 None,
+                                 shape,
+                                 get_unique_id())

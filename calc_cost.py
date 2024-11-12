@@ -448,4 +448,4 @@ def calc_best_strategy_on_chip(
             best_allocation_all_patterns = best_allocation
 
     # 传进来的nodes已经重新排序了，所以重新传回去
-    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list
+    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list,communicate_on_chip

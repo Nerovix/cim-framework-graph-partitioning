@@ -119,12 +119,12 @@ def process(onnx_graph):
                 s = iprefix - jprefix
                 s = [i for i in range(conv_node_cnt) if s >> i & 1 == 1]
                 # s 里面是按照conv重编号的
-                cost, alloc, nodes_re_id, cores_needed_list= calc_best_strategy_on_chip(
+                cost, alloc, nodes_re_id, cores_needed_list,communicate_on_chip_edgeset= calc_best_strategy_on_chip(
                     s, re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
                 if dp[j] + cost < dp[i]:
                     dp[i] = dp[j] + cost
                     dpf[i] = j
-                    dpalloc[i] = (alloc,nodes_re_id,cores_needed_list)
+                    dpalloc[i] = (alloc,nodes_re_id,cores_needed_list,communicate_on_chip_edgeset)
 
         print(dpf[i])
 
@@ -133,7 +133,7 @@ def process(onnx_graph):
     while prefixes_bitmask_re_id[u] != 0:
         stage = []
         v = dpf[u]
-        alloc,nodes_re_id,cores_needed_list = dpalloc[u]
+        alloc,nodes_re_id,cores_needed_list,communicate_on_chip_edgeset = dpalloc[u]
         for i in range(len(alloc)):
             stage.append(f"{nodes_re_id[i]}-{cores_needed_list[i]}-{len(alloc[i])}")        
         stages.append(stage)
