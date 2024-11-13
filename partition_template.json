@@ -4,7 +4,6 @@
             "0":{
                 "cluster_id":0,
                 "weight_replica_id":0,
-                "weight_node_shape":[256,256,3,3],
                 
                 "instructions":[
                     {

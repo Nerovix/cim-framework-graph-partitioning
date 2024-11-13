@@ -206,3 +206,19 @@ def split_to_chain(conv_node_re_id, re_id_graph_edgeset):
         chain.reverse()
         res.append(chain)
     return res
+
+def topsort(graph):
+    ind=[len(_[0]) for _ in graph]
+    q=deque([i for i,v in enumerate(ind) if v==0])
+    
+    ans=[]
+    
+    while q:
+        x=q.popleft()
+        ans.append(x)
+        for y in graph[x][1]:
+            ind[y]-=1
+            if ind[y]==0:
+                q.append(y)
+
+    return ans

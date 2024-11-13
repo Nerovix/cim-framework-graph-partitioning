@@ -85,7 +85,6 @@ def calc_cores_and_time_needed(onnx_graph, node):
         print(C_out, cp.channels_on_a_core)
         print('cores needed:', cores_needed)
 
-
         # 需要计算周期：img2col之后有H_out * W_out次输入
         # 每m * activation_width周期可以计算一次
         # 然后除以权重复制次数
@@ -179,7 +178,7 @@ def calc_best_strategy_on_chip(
 
     # 先特判：直接就放不下
     if sum(cores_needed_list) > cp.C:
-        return math.inf, None, None, None
+        return math.inf, None, None, None, None
 
     print("nodes_re_id:" + str(nodes_re_id))
     print("cores_needed_list:" + str(cores_needed_list))
@@ -317,7 +316,7 @@ def calc_best_strategy_on_chip(
             for i in range(nodecnt):
                 for j in range(nodecnt):
                     if (nodes_re_id[i], nodes_re_id[j]
-                            ) not in re_id_graph_edgeset:
+                        ) not in re_id_graph_edgeset:
                         continue
                     shape = re_id_graph_edgeset[(
                         nodes_re_id[i], nodes_re_id[j])]
@@ -448,4 +447,4 @@ def calc_best_strategy_on_chip(
             best_allocation_all_patterns = best_allocation
 
     # 传进来的nodes已经重新排序了，所以重新传回去
-    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list,communicate_on_chip
+    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list, communicate_on_chip

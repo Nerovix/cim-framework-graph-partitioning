@@ -26,8 +26,6 @@ def get_instrctions_for_a_stage(
         belong_node,
         sorted_nodes,
         # 排序后的全部节点
-        tensor_use_dict,
-        # dict套list，表示一个tensor被哪些节点使用，
         onnx_graph):
 
     in_nodes_re_id = [0] * len(graph)
@@ -43,14 +41,26 @@ def get_instrctions_for_a_stage(
                 'instructions': []
             }
 
-    for i in range(allocation):
+    # instruction的dict初始化 + load权重的指令
+    for i in range(len(allocation)):
         for j in range(len(allocation[i])):
+            filter_shape = get_tensor_shape(
+                onnx_graph, onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].input[1])
+            channelcnt=filter_shape[0]
             for core in allocation[i][j]:
                 instructions[f'core_{core[0]}_{core[1]}'] = {
                     'cluster_id': onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].name,
                     'weight_replica_id': j,
                     'instructions': []
                 }
+                use_channel=min(channelcnt,cp.channels_on_a_core)
+                instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
+                    'op': 'read',
+                    'attr': {
+                        'shape':[use_channel,filter_shape[1],filter_shape[2],filter_shape[3]]
+                    }
+                })
+                channelcnt-=use_channel
 
     nodes_to_allocation_id = [-1] * len(graph)
     for i in sorted_nodes:
@@ -72,11 +82,12 @@ def get_instrctions_for_a_stage(
                     nodes_re_id[i], nodes_re_id[j])]
     # 稍微topsort下
     indeg = [0] * nodecnt
-    for k, v in tmp_edgeset:
-        indeg[j] += 1
+    for a,b in tmp_edgeset:
+        indeg[b] += 1
 
     id_topsort = []
     q = deque([i for i in range(nodecnt) if indeg[i] == 0])
+
     while q:
         x = q.popleft()
         id_topsort.append(x)
@@ -87,8 +98,6 @@ def get_instrctions_for_a_stage(
                     q.append(y)
 
 
-#   todotodotodtodo
-#    !!!先load权重
 
     def add_instructions(icores, jcores, shape, tensor_name_prefix):
         if jcores is None:  # 写到global
@@ -198,7 +207,9 @@ def get_instrctions_for_a_stage(
                     tensor_name = tensor_name_prefix + \
                         f'_in_cluster_part_{src}'
                     add_send_receive(frm, to, src, tensor_name)
-
+    print('nodes_re_id:',nodes_re_id)
+    print('id_topsort:',id_topsort)
+    print()
     for k in range(cp.batch_size):
 
         for i_topsort_id in range(nodecnt):
@@ -229,7 +240,7 @@ def get_instrctions_for_a_stage(
             # ----------计算----------
             in_cluster_nodes = [
                 _ for _ in sorted_nodes if belong_node[_] == re_id_to_node_id[nodes_re_id[i]]]
-            shape = get_tensor_shape( 
+            shape = get_tensor_shape(
                 # 假定挂在这个conv上的节点的操作都跟这个conv输入的大小一样
                 # 这个假定其实不是很科学，但是考虑到相邻的layer的激活值尺寸差别不大，就这么处理了
                 onnx_graph,
@@ -237,7 +248,7 @@ def get_instrctions_for_a_stage(
 
             shape[0] = 1
             runner = k % len(allocation[i])
-            core_num = allocation[i][runner]
+            core_num = len(allocation[i][runner])
             for nodeid in in_cluster_nodes:
                 channelcnt = shape[1]
                 for coreid in range(core_num):
@@ -262,16 +273,15 @@ def get_instrctions_for_a_stage(
                                 'attr': {
                                     'X_shape': X_shape,
                                     'W_shape': W_shape,
-                                    'padding': padding,
-                                    'strides': strides
+                                    'padding': list(padding),
+                                    'strides': list(strides)
                                 }
                             })
-                        else: # depthwise conv
+                        else:  # depthwise conv
                             X_shape = [1, use_channel, shape[2], shape[3]]
                             W_shape = get_tensor_shape(
                                 onnx_graph, onnx_graph.node[nodeid].input[1])
                             assert W_shape[1] == 1
-                            assert W_shape[0] == shape[1]
                             W_shape[0] = use_channel
                             instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                                 'op': 'depthwise_conv',
@@ -304,7 +314,7 @@ def get_instrctions_for_a_stage(
 
             for j in range(nodecnt):
                 if (nodes_re_id[i], nodes_re_id[j]
-                        ) not in re_id_graph_edgeset:
+                    ) not in re_id_graph_edgeset:
                     continue
                 shape = re_id_graph_edgeset[(
                     nodes_re_id[i], nodes_re_id[j])]
@@ -342,3 +352,5 @@ def get_instrctions_for_a_stage(
                                  None,
                                  shape,
                                  get_unique_id())
+    
+    return instructions 

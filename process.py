@@ -1,6 +1,8 @@
-from graph import build_graph, find_all_prefixes, get_belong_node
+from graph import build_graph, find_all_prefixes, get_belong_node, topsort
 from calc_cost import calc_best_strategy_on_chip
 from read_file import get_tensor_shape
+from partition_result_gen import get_instrctions_for_a_stage
+import cimpara as cp
 import math
 
 
@@ -119,12 +121,16 @@ def process(onnx_graph):
                 s = iprefix - jprefix
                 s = [i for i in range(conv_node_cnt) if s >> i & 1 == 1]
                 # s 里面是按照conv重编号的
-                cost, alloc, nodes_re_id, cores_needed_list,communicate_on_chip_edgeset= calc_best_strategy_on_chip(
+                cost, alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset = calc_best_strategy_on_chip(
                     s, re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
                 if dp[j] + cost < dp[i]:
                     dp[i] = dp[j] + cost
                     dpf[i] = j
-                    dpalloc[i] = (alloc,nodes_re_id,cores_needed_list,communicate_on_chip_edgeset)
+                    dpalloc[i] = (
+                        alloc,
+                        nodes_re_id,
+                        cores_needed_list,
+                        communicate_on_chip_edgeset)
 
         print(dpf[i])
 
@@ -133,15 +139,46 @@ def process(onnx_graph):
     while prefixes_bitmask_re_id[u] != 0:
         stage = []
         v = dpf[u]
-        alloc,nodes_re_id,cores_needed_list,communicate_on_chip_edgeset = dpalloc[u]
-        for i in range(len(alloc)):
-            stage.append(f"{nodes_re_id[i]}-{cores_needed_list[i]}-{len(alloc[i])}")        
-        stages.append(stage)
+        stages.append(dpalloc[u])
         u = v
 
     stages.reverse()
-    print(stages)
 
-    # 打印一下方案看看
-    # askdfja;sldkfjals;kfj
+    instructions = dict()
+    for i in range(cp.P):
+        for j in range(cp.Q):
+            instructions[f'core_{i}_{j}'] = {
+                'stages': {}
+            }
+
+    sorted_nodes = topsort(graph)
+
+    for stageid, stage in enumerate(stages):
+        alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset = stage
+        instruction_cur = get_instrctions_for_a_stage(
+            alloc,
+            nodes_re_id,
+            communicate_on_chip_edgeset,
+            re_id_graph,
+            re_id_rev_graph,
+            re_id_graph_edgeset,
+            re_id_to_node_id,
+            input_data_conv_node_re_id,
+            output_data_conv_node_re_id,
+            graph,
+            belong_node,
+            sorted_nodes,
+            onnx_graph
+        )
+
+        for i in range(cp.P):
+            for j in range(cp.Q):
+                core_name = f'core_{i}_{j}'
+                instructions[core_name]['stages'][str(stageid)] = {
+                    'cluster_id': instruction_cur[core_name]['cluster_id'],
+                    'weight_replica_id': instruction_cur[core_name]['weight_replica_id'],
+                    'instructions': instruction_cur[core_name]['instructions']
+                }
+
+    return instructions
 # '''
