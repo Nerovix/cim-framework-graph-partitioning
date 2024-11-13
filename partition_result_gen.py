@@ -240,29 +240,33 @@ def get_instrctions_for_a_stage(
             # ----------计算----------
             in_cluster_nodes = [
                 _ for _ in sorted_nodes if belong_node[_] == re_id_to_node_id[nodes_re_id[i]]]
-            shape = get_tensor_shape(
+            input_shape = get_tensor_shape(
                 # 假定挂在这个conv上的节点的操作都跟这个conv输入的大小一样
                 # 这个假定其实不是很科学，但是考虑到相邻的layer的激活值尺寸差别不大，就这么处理了
                 onnx_graph,
                 onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].input[0])
 
-            shape[0] = 1
+            input_shape[0] = 1
             runner = k % len(allocation[i])
             core_num = len(allocation[i][runner])
             for nodeid in in_cluster_nodes:
-                channelcnt = shape[1]
+                channelcnt=0
+                op_type = onnx_graph.node[nodeid].op_type
+                if op_type=='Conv':
+                    channelcnt=get_tensor_shape(
+                                onnx_graph, onnx_graph.node[nodeid].input[1])[0]
                 for coreid in range(core_num):
                     use_channel = min(channelcnt, cp.channels_on_a_core)
                     core = allocation[i][runner][coreid]
                     channelcnt -= use_channel
-                    op_type = onnx_graph.node[nodeid].op_type
                     if op_type == 'Conv':
                         group = [
                             attr.i for attr in onnx_graph.node[nodeid].attribute if attr.name == 'group'][0]
                         if group == 1:
-                            X_shape = [1, use_channel, shape[2], shape[3]]
+                            X_shape = [1, use_channel, input_shape[2], input_shape[3]]
                             W_shape = get_tensor_shape(
                                 onnx_graph, onnx_graph.node[nodeid].input[1])
+                            assert use_channel!=0
                             W_shape[1] = use_channel
                             padding = [
                                 attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'pads'][0]
@@ -278,7 +282,7 @@ def get_instrctions_for_a_stage(
                                 }
                             })
                         else:  # depthwise conv
-                            X_shape = [1, use_channel, shape[2], shape[3]]
+                            X_shape = [1, use_channel, input_shape[2], input_shape[3]]
                             W_shape = get_tensor_shape(
                                 onnx_graph, onnx_graph.node[nodeid].input[1])
                             assert W_shape[1] == 1
@@ -295,14 +299,14 @@ def get_instrctions_for_a_stage(
                         instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                             'op': 'add',
                             'attr': {
-                                'shape': [1, use_channel, shape[2], shape[3]]
+                                'shape': [1, use_channel, input_shape[2], input_shape[3]]
                             }
                         })
                     elif op_type == 'Relu':
                         instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                             'op': 'relu',
                             'attr': {
-                                'shape': [1, use_channel, shape[2], shape[3]]
+                                'shape': [1, use_channel, input_shape[2], input_shape[3]]
                             }
                         })
                     else:
