@@ -269,10 +269,10 @@ def calc_best_strategy_on_chip(
                     remainder = shape[1] % len(accumulate_load)
                     for i in range(len(accumulate_load)):
                         use_channel = shape[1] // len(accumulate_load) + \
-                            max(remainder, 1)
+                            min(remainder, 1)
                         accumulate_load[i] += use_channel * \
                             shape[2] * shape[3] * cp.activation_width // 8
-                        remainder -= max(remainder, 1)
+                        remainder -= min(remainder, 1)
 
                 circle_dis = 0
                 for p in range(len(accumulate_load)):
