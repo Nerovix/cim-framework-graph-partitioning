@@ -57,6 +57,7 @@ def get_instrctions_for_a_stage(
                 instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                     'op': 'read',
                     'attr': {
+                        'tensor_type': 'weight',
                         'shape': [use_channel, filter_shape[1], filter_shape[2], filter_shape[3]]
                     }
                 })
@@ -106,6 +107,7 @@ def get_instrctions_for_a_stage(
                 instructions[f'core_{icore[0]}_{icore[1]}']['instructions'].append({
                     'op': 'write',
                     'attr': {
+                        'tensor_type': 'feature',
                         'shape': [1, use_channel, shape[2], shape[3]]
                     }
                 })
@@ -154,6 +156,7 @@ def get_instrctions_for_a_stage(
                 instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                     'op': 'read',
                     'attr': {
+                        'tensor_type': 'feature',
                         'shape': [1, use_channel, shape[2], shape[3]]
                     }
                 })
@@ -320,7 +323,7 @@ def get_instrctions_for_a_stage(
 
             for j in range(nodecnt):
                 if (nodes_re_id[i], nodes_re_id[j]
-                    ) not in re_id_graph_edgeset:
+                        ) not in re_id_graph_edgeset:
                     continue
                 shape = re_id_graph_edgeset[(
                     nodes_re_id[i], nodes_re_id[j])]
