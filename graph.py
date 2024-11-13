@@ -62,7 +62,7 @@ def get_belong_node(graph, is_conv_node, is_fc_node):
 
     # print(main_chain)
     main_chain_edge = dict()
-    for i in range(len(main_chain)-1):
+    for i in range(len(main_chain) - 1):
         main_chain_edge[(main_chain[i], main_chain[i + 1])] = True
         main_chain_edge[(main_chain[i + 1], main_chain[i])] = True
 
@@ -207,18 +207,19 @@ def split_to_chain(conv_node_re_id, re_id_graph_edgeset):
         res.append(chain)
     return res
 
+
 def topsort(graph):
-    ind=[len(_[0]) for _ in graph]
-    q=deque([i for i,v in enumerate(ind) if v==0])
-    
-    ans=[]
-    
+    ind = [len(_[0]) for _ in graph]
+    q = deque([i for i, v in enumerate(ind) if v == 0])
+
+    ans = []
+
     while q:
-        x=q.popleft()
+        x = q.popleft()
         ans.append(x)
         for y in graph[x][1]:
-            ind[y]-=1
-            if ind[y]==0:
+            ind[y] -= 1
+            if ind[y] == 0:
                 q.append(y)
 
     return ans

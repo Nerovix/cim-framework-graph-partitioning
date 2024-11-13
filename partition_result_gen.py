@@ -46,21 +46,21 @@ def get_instrctions_for_a_stage(
         for j in range(len(allocation[i])):
             filter_shape = get_tensor_shape(
                 onnx_graph, onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].input[1])
-            channelcnt=filter_shape[0]
+            channelcnt = filter_shape[0]
             for core in allocation[i][j]:
                 instructions[f'core_{core[0]}_{core[1]}'] = {
                     'cluster_id': onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].name,
                     'weight_replica_id': j,
                     'instructions': []
                 }
-                use_channel=min(channelcnt,cp.channels_on_a_core)
+                use_channel = min(channelcnt, cp.channels_on_a_core)
                 instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                     'op': 'read',
                     'attr': {
-                        'shape':[use_channel,filter_shape[1],filter_shape[2],filter_shape[3]]
+                        'shape': [use_channel, filter_shape[1], filter_shape[2], filter_shape[3]]
                     }
                 })
-                channelcnt-=use_channel
+                channelcnt -= use_channel
 
     nodes_to_allocation_id = [-1] * len(graph)
     for i in sorted_nodes:
@@ -82,7 +82,7 @@ def get_instrctions_for_a_stage(
                     nodes_re_id[i], nodes_re_id[j])]
     # 稍微topsort下
     indeg = [0] * nodecnt
-    for a,b in tmp_edgeset:
+    for a, b in tmp_edgeset:
         indeg[b] += 1
 
     id_topsort = []
@@ -96,8 +96,6 @@ def get_instrctions_for_a_stage(
                 indeg[y] -= 1
                 if indeg[y] == 0:
                     q.append(y)
-
-
 
     def add_instructions(icores, jcores, shape, tensor_name_prefix):
         if jcores is None:  # 写到global
@@ -202,13 +200,15 @@ def get_instrctions_for_a_stage(
                     to = (pos + 1) % core_num
                     pos = (pos + 2) % core_num
                     src = (frm - round + core_num) % core_num
+                    if accumulate_load_channelcnt[src] == 0:
+                        continue
                     frm = jcores[frm]
                     to = jcores[to]
                     tensor_name = tensor_name_prefix + \
                         f'_in_cluster_part_{src}'
                     add_send_receive(frm, to, src, tensor_name)
-    print('nodes_re_id:',nodes_re_id)
-    print('id_topsort:',id_topsort)
+    print('nodes_re_id:', nodes_re_id)
+    print('id_topsort:', id_topsort)
     print()
     for k in range(cp.batch_size):
 
@@ -250,11 +250,11 @@ def get_instrctions_for_a_stage(
             runner = k % len(allocation[i])
             core_num = len(allocation[i][runner])
             for nodeid in in_cluster_nodes:
-                channelcnt=0
+                channelcnt = 0
                 op_type = onnx_graph.node[nodeid].op_type
-                if op_type=='Conv':
-                    channelcnt=get_tensor_shape(
-                                onnx_graph, onnx_graph.node[nodeid].input[1])[0]
+                if op_type == 'Conv':
+                    channelcnt = get_tensor_shape(
+                        onnx_graph, onnx_graph.node[nodeid].input[1])[0]
                 for coreid in range(core_num):
                     use_channel = min(channelcnt, cp.channels_on_a_core)
                     core = allocation[i][runner][coreid]
@@ -263,10 +263,11 @@ def get_instrctions_for_a_stage(
                         group = [
                             attr.i for attr in onnx_graph.node[nodeid].attribute if attr.name == 'group'][0]
                         if group == 1:
-                            X_shape = [1, use_channel, input_shape[2], input_shape[3]]
+                            X_shape = [
+                                1, use_channel, input_shape[2], input_shape[3]]
                             W_shape = get_tensor_shape(
                                 onnx_graph, onnx_graph.node[nodeid].input[1])
-                            assert use_channel!=0
+                            assert use_channel != 0
                             W_shape[1] = use_channel
                             padding = [
                                 attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'pads'][0]
@@ -282,7 +283,8 @@ def get_instrctions_for_a_stage(
                                 }
                             })
                         else:  # depthwise conv
-                            X_shape = [1, use_channel, input_shape[2], input_shape[3]]
+                            X_shape = [
+                                1, use_channel, input_shape[2], input_shape[3]]
                             W_shape = get_tensor_shape(
                                 onnx_graph, onnx_graph.node[nodeid].input[1])
                             assert W_shape[1] == 1
@@ -356,5 +358,5 @@ def get_instrctions_for_a_stage(
                                  None,
                                  shape,
                                  get_unique_id())
-    
-    return instructions 
+
+    return instructions
