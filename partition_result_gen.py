@@ -268,7 +268,7 @@ def get_instrctions_for_a_stage(
                             W_shape = get_tensor_shape(
                                 onnx_graph, onnx_graph.node[nodeid].input[1])
                             assert use_channel != 0
-                            W_shape[1] = use_channel
+                            W_shape[0] = use_channel
                             padding = [
                                 attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'pads'][0]
                             strides = [
