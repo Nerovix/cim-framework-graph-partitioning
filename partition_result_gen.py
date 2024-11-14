@@ -273,6 +273,10 @@ def get_instrctions_for_a_stage(
                     if op_type == 'Conv':
                         group = [
                             attr.i for attr in onnx_graph.node[nodeid].attribute if attr.name == 'group'][0]
+                        padding = [
+                            attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'pads'][0]
+                        strides = [
+                            attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'strides'][0]
                         if group == 1:
                             X_shape = [
                                 1, input_shape[1], input_shape[2], input_shape[3]]
@@ -280,10 +284,6 @@ def get_instrctions_for_a_stage(
                                 onnx_graph, onnx_graph.node[nodeid].input[1])
                             assert use_channel != 0
                             W_shape[0] = use_channel
-                            padding = [
-                                attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'pads'][0]
-                            strides = [
-                                attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'strides'][0]
                             instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                                 'op': 'conv',
                                 'attr': {
@@ -305,7 +305,9 @@ def get_instrctions_for_a_stage(
                                 'attr': {
                                     'group': group,
                                     'X_shape': X_shape,
-                                    'W_shape': W_shape
+                                    'W_shape': W_shape,
+                                    'padding': list(padding),
+                                    'strides': list(strides)
                                 }
                             })
                     elif op_type == 'Add':

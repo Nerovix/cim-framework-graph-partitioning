@@ -95,7 +95,7 @@ def calc_cores_and_time_needed(onnx_graph, node):
             H_out *
             W_out *
             cp.m *
-            cp.activation_width /
+            cp.feature_width /
             duplicate_times)
 
         # 把weight load上去需要的时间
@@ -242,7 +242,7 @@ def calc_best_strategy_on_chip(
                     use_channel = min(
                         channelcnt, cp.channels_on_a_core)
                     chip_node_load[core[0]][core[1]] += use_channel * \
-                        shape[2] * shape[3] * cp.activation_width // 8  # 转Byte
+                        shape[2] * shape[3] * cp.feature_width // 8  # 转Byte
                     channelcnt -= use_channel
 
                 assert channelcnt == 0
@@ -261,7 +261,7 @@ def calc_best_strategy_on_chip(
                         use_channel = min(
                             channelcnt, cp.channels_on_a_core)
                         accumulate_load[p] += use_channel * \
-                            shape[2] * shape[3] * cp.activation_width // 8
+                            shape[2] * shape[3] * cp.feature_width // 8
                         p = (p + 1) % len(accumulate_load)
                         channelcnt -= use_channel
                 else:
@@ -271,7 +271,7 @@ def calc_best_strategy_on_chip(
                         use_channel = shape[1] // len(accumulate_load) + \
                             min(remainder, 1)
                         accumulate_load[i] += use_channel * \
-                            shape[2] * shape[3] * cp.activation_width // 8
+                            shape[2] * shape[3] * cp.feature_width // 8
                         remainder -= min(remainder, 1)
 
                 circle_dis = 0
@@ -300,7 +300,7 @@ def calc_best_strategy_on_chip(
                         use_channel *
                         shape[2] *
                         shape[3] *
-                        cp.activation_width //
+                        cp.feature_width //
                         8 *
                         (math.fabs(icore[0] - jcore[0]) + math.fabs(icore[1] - jcore[1]))
                     )
@@ -310,7 +310,7 @@ def calc_best_strategy_on_chip(
             def add_load_global(shape):
                 nonlocal global_memory_load
                 global_memory_load += shape[1] * shape[2] * \
-                    shape[3] * cp.activation_width // 8
+                    shape[3] * cp.feature_width // 8
                 # print(shape)
 
             for i in range(nodecnt):

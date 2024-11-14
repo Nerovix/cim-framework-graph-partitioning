@@ -6,7 +6,7 @@ m, n, H, W, T, K, local_memory_size, C, B, P, Q, global_memory_bandwidth = confi
 batch_size = 8
 
 weight_width = 8  # width of weights
-activation_width = 8  # width of activation values
+feature_width = 8  # width of activation values
 
 
 # 每个核能计算的channel_out数量：每个macro的计算能力*每个macro group包含K个macro
