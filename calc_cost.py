@@ -106,7 +106,7 @@ def calc_cores_and_time_needed(onnx_graph, node):
             K_w *
             cp.weight_width /
             8 /  # 除8转Byte
-            cp.global_memory_bandwidth)  # todo 输入输出带宽要不要对半分？
+            cp.global_memory_bandwidth) * duplicate_times
 
         # print(cores_needed, C_out, cp.channels_on_a_core)
         return cores_needed, time_needed, load_time_needed
@@ -143,7 +143,8 @@ def calc_best_strategy_on_chip(
         re_id_to_node_id,
         input_data_conv_node_re_id,  # 外层提前整理好的，需要直接从图片读数据的第一个节点的conv重编号
         output_data_conv_node_re_id,  # 外层提前整理好的，需要写数据给global，给后面的fc用的节点的conv重编号
-        onnx_graph):
+        onnx_graph,
+        partition_mode=0):
 
     print("-------------------lets go--------------------")
 
@@ -166,7 +167,7 @@ def calc_best_strategy_on_chip(
 
     cores_needed_list = []
     time_needed_list = []
-    load_time_needed_all = 0  # 这里一个算子只算一份，假装可以广播
+    load_time_needed_list = []
 
     for node_re_id in nodes_re_id:
         node = onnx_graph.node[re_id_to_node_id[node_re_id]]
@@ -174,16 +175,16 @@ def calc_best_strategy_on_chip(
             onnx_graph, node)
         cores_needed_list.append(cores_needed)
         time_needed_list.append(time_needed)
-        load_time_needed_all += load_time_needed
+        load_time_needed_list.append(load_time_needed)
 
     # 先特判：直接就放不下
     if sum(cores_needed_list) > cp.C:
-        return math.inf, None, None, None, None
+        return math.inf, None, None, None, None, None
 
     print("nodes_re_id:" + str(nodes_re_id))
     print("cores_needed_list:" + str(cores_needed_list))
     print("time_needed_list:" + str(time_needed_list))
-    print("load_time_needed_all:" + str(load_time_needed_all))
+    print("load_time_needed_list:" + str(load_time_needed_list))
     print(re_id_graph_edgeset)
 
     def calc_dis(core0, core1):
@@ -191,6 +192,7 @@ def calc_best_strategy_on_chip(
 
     best_time_all_patterns = math.inf
     best_allocation_all_patterns = None
+    best_pack_all_patterns = None
     for pattern_pos_list in pattern_pos_lists:
         duplicate_times = [1] * nodecnt
 
@@ -316,7 +318,7 @@ def calc_best_strategy_on_chip(
             for i in range(nodecnt):
                 for j in range(nodecnt):
                     if (nodes_re_id[i], nodes_re_id[j]
-                        ) not in re_id_graph_edgeset:
+                            ) not in re_id_graph_edgeset:
                         continue
                     shape = re_id_graph_edgeset[(
                         nodes_re_id[i], nodes_re_id[j])]
@@ -395,56 +397,83 @@ def calc_best_strategy_on_chip(
                                       for _ in cluster_internel_communication_cost)
 
             return calc_time_list, communication_time + \
-                max(calc_time_list) + load_time_needed_all
+                max(calc_time_list) + \
+                sum([load_time_needed_list[i] * duplicate_times[i] for i in range(nodecnt)]), \
+                max(calc_time_list), \
+                communication_time, \
+                math.ceil(max([max(_) for _ in chip_node_load]) / cp.B), \
+                math.ceil(global_memory_load / cp.global_memory_bandwidth), \
+                math.ceil(most_expensive_request / cp.B), \
+                max(max(_) for _ in cluster_internel_communication_cost), \
+                sum([load_time_needed_list[i] * duplicate_times[i] for i in range(nodecnt)])
 
         best_time = math.inf
         best_allocation = None
-        # print("\ntry a new pattern:")
-        while True:
-            # print("new loop")
-            allocation = put_nodes_on_chip(duplicate_times)
-            calc_time_list, cur_time = get_cost_for_an_allocation(allocation)
+        best_pack = None
+        
+        if partition_mode==0 or partition_mode==1:
+            
+            # print("\ntry a new pattern:")
+            while True:
+                # print("new loop")
+                allocation = put_nodes_on_chip(duplicate_times)
+                pack = get_cost_for_an_allocation(allocation)
+                calc_time_list, cur_time = pack[0], pack[1]
+                # print(
+                #     cur_time,
+                #     node_re_id,
+                #     cores_needed_list,
+                #     duplicate_times,
+                #     pack)
+                if cur_time < best_time:
+                    best_allocation = allocation
+                    best_time = cur_time
+                    best_pack = pack
+                calc_time_list_id = [(v, i) for i, v in enumerate(calc_time_list)]
+                calc_time_list_id.sort()
+                calc_time_list_id.reverse()
+                used_core_num = sum([cores_needed_list[i] * duplicate_times[i]
+                                        for i in range(nodecnt)])
+                j = 0
+                assert (len(calc_time_list_id) == nodecnt)
+                while j < nodecnt:
+                    if duplicate_times[calc_time_list_id[j][1]] + 1 <= cp.batch_size and used_core_num + \
+                            cores_needed_list[calc_time_list_id[j][1]] <= cp.C:
+                        duplicate_times[calc_time_list_id[j][1]] += 1
+                        break
+                    else:
+                        j += 1
 
-            if cur_time > best_time:
-                break
+                if j == nodecnt:
+                    break
+            # print(cores_needed_list)
+            # print(duplicate_times)
+            # print([cores_needed_list[i] * duplicate_times[i]
+            #       for i in range(nodecnt)])
+            # print(sum([cores_needed_list[i] * duplicate_times[i]
+            #       for i in range(nodecnt)]))
+            # print(calc_time_list)
+            # print(f"best time: {best_time}")
+            # print(f"cur time: {cur_time}")
+            # print(f"calc time: {max(calc_time_list)}")
+            # print(
+            #     f"communication time: {
+            #         cur_time -
+            #         max(calc_time_list) -
+            #         load_time_needed_all}")
+            # print(f"load time: {load_time_needed_all}")
+        else:
+            assert partition_mode==2
+            allocation = put_nodes_on_chip(duplicate_times)
+            pack = get_cost_for_an_allocation(allocation)
+            calc_time_list, cur_time = pack[0], pack[1]
             best_allocation = allocation
             best_time = cur_time
-            calc_time_list_id = [(v, i) for i, v in enumerate(calc_time_list)]
-            calc_time_list_id.sort()
-            calc_time_list_id.reverse()
-            used_core_num = sum([cores_needed_list[i] * duplicate_times[i]
-                                 for i in range(nodecnt)])
-            j = 0
-            assert (len(calc_time_list_id) == nodecnt)
-            while j < nodecnt:
-                if duplicate_times[calc_time_list_id[j][1]] + 1 <= cp.batch_size and used_core_num + \
-                        cores_needed_list[calc_time_list_id[j][1]] <= cp.C:
-                    duplicate_times[calc_time_list_id[j][1]] += 1
-                    break
-                else:
-                    j += 1
-
-            if j == nodecnt:
-                break
-        # print(cores_needed_list)
-        # print(duplicate_times)
-        # print([cores_needed_list[i] * duplicate_times[i]
-        #       for i in range(nodecnt)])
-        # print(sum([cores_needed_list[i] * duplicate_times[i]
-        #       for i in range(nodecnt)]))
-        # print(calc_time_list)
-        # print(f"best time: {best_time}")
-        # print(f"cur time: {cur_time}")
-        # print(f"calc time: {max(calc_time_list)}")
-        # print(
-        #     f"communication time: {
-        #         cur_time -
-        #         max(calc_time_list) -
-        #         load_time_needed_all}")
-        # print(f"load time: {load_time_needed_all}")
+            best_pack = pack
         if best_time < best_time_all_patterns:
             best_time_all_patterns = best_time
             best_allocation_all_patterns = best_allocation
+            best_pack_all_patterns = best_pack
 
     # 传进来的nodes已经重新排序了，所以重新传回去
-    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list, communicate_on_chip
+    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list, communicate_on_chip, best_pack_all_patterns
