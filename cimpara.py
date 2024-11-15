@@ -1,16 +1,43 @@
-configs = [(),
-           (16, 8, 32, 8, 16, 8, 512, 64, 16, 8, 8, 64),]
-config_id = 1
-m, n, H, W, T, K, local_memory_size, C, B, P, Q, global_memory_bandwidth = configs[
-    config_id]
+# ----------------config 1--------------------
+m = 16
+n = 8
+H = 32
+W = 8
+T = 16
+K = 16
+local_memory_size = 512
+C = 64  # /144
+P = 8  # /12
+Q = 8  # /12
+B = 8  # /16
+global_memory_bandwidth = 64
+# --------------------------------------------
+
+'''
+# ----------------config 2--------------------
+m = 16
+n = 8
+H = 32
+W = 8
+T = 2  # /4/8/16
+K = 16
+local_memory_size = 512
+C = 64
+P = 8
+Q = 8
+B = 8  # /16
+global_memory_bandwidth = 64
+# --------------------------------------------
+'''
+
+
 batch_size = 8
 
 weight_width = 8  # width of weights
 feature_width = 8  # width of activation values
 
-
-# 每个核能计算的channel_out数量：每个macro的计算能力*每个macro group包含K个macro
-channels_on_a_core = n * W // weight_width * K
+# 每个核能计算的channel_out数量：每个macro的计算能力*每个macro group包含T个macro
+channels_on_a_core = n * W // weight_width * T
 
 pattern_maps_64 = [
     [   # S-snake
@@ -132,4 +159,3 @@ for pattern_map in pattern_maps:
     pattern_pos_lists.append(pos_lists)
 
 # print(pattern_pos_lists[1])
-

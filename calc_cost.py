@@ -56,9 +56,9 @@ def calc_cores_and_time_needed(onnx_graph, node):
         if not P:
             P = [0, 0, 0, 0]
 
-        print("conv layer:")
-        print("[N, C_in, H, W]" + str([N, C_in, H, W]))
-        print("[C_out, C_in, K_h, K_w] " + str([C_out, C_in, K_h, K_w]))
+        # print("conv layer:")
+        # print("[N, C_in, H, W]" + str([N, C_in, H, W]))
+        # print("[C_out, C_in, K_h, K_w] " + str([C_out, C_in, K_h, K_w]))
         # print("S" + str(S))
         # print("P" + str(P))
 
@@ -71,19 +71,19 @@ def calc_cores_and_time_needed(onnx_graph, node):
         # matA = [N * H_out * W_out, C_in * K_h * K_w]
         # matB = [C_in * K_h * K_w, C_out]
 
-        if cp.H * cp.m * cp.T < K_h * K_w * C_in:
+        if cp.H * cp.m * cp.K < K_h * K_w * C_in:
             raise Exception('holy the conv op is tooooooo big')
 
         # 核内允许权重复制的次数：每个channel_out需要K_h * K_w * C_in个权重
         # 每个macro group可以放下H*m个权重
         # 因此放下一个channel_out需要ceil(K_h * K_w * C_in  / (H * m))个macro group
-        # 因此能放下floor(T/ceil(...))次权重复制
-        duplicate_times = cp.T // math.ceil(K_h * K_w * C_in / (cp.H * cp.m))
-        print('duplicate times:', duplicate_times)
+        # 因此能放下floor(K/ceil(...))次权重复制
+        duplicate_times = cp.K // math.ceil(K_h * K_w * C_in / (cp.H * cp.m))
+        # print('duplicate times:', duplicate_times)
 
         cores_needed = math.ceil(C_out / cp.channels_on_a_core)
-        print(C_out, cp.channels_on_a_core)
-        print('cores needed:', cores_needed)
+        # print(C_out, cp.channels_on_a_core)
+        # print('cores needed:', cores_needed)
 
         # 需要计算周期：img2col之后有H_out * W_out次输入
         # 每m * activation_width周期可以计算一次
@@ -146,7 +146,7 @@ def calc_best_strategy_on_chip(
         onnx_graph,
         partition_mode=0):
 
-    print("-------------------lets go--------------------")
+    # print("-------------------lets go--------------------")
 
     allnodescnt = len(re_id_graph)
     in_nodes_re_id = [0] * allnodescnt
@@ -179,20 +179,20 @@ def calc_best_strategy_on_chip(
 
     # 先特判：直接就放不下
     if sum(cores_needed_list) > cp.C:
-        return math.inf, None, None, None, None, None
+        return math.inf, None, None, None, None
 
-    print("nodes_re_id:" + str(nodes_re_id))
-    print("cores_needed_list:" + str(cores_needed_list))
-    print("time_needed_list:" + str(time_needed_list))
-    print("load_time_needed_list:" + str(load_time_needed_list))
-    print(re_id_graph_edgeset)
+    # print("nodes_re_id:" + str(nodes_re_id))
+    # print("cores_needed_list:" + str(cores_needed_list))
+    # print("time_needed_list:" + str(time_needed_list))
+    # print("load_time_needed_list:" + str(load_time_needed_list))
+    # print(re_id_graph_edgeset)
 
     def calc_dis(core0, core1):
         return math.fabs(core0[0] - core1[0]) + math.fabs(core0[1] - core1[1])
 
     best_time_all_patterns = math.inf
     best_allocation_all_patterns = None
-    best_pack_all_patterns = None
+    # best_pack_all_patterns = None
     for pattern_pos_list in pattern_pos_lists:
         duplicate_times = [1] * nodecnt
 
@@ -399,17 +399,17 @@ def calc_best_strategy_on_chip(
             return calc_time_list, communication_time + \
                 max(calc_time_list) + \
                 sum([load_time_needed_list[i] * duplicate_times[i] for i in range(nodecnt)]), \
-                max(calc_time_list), \
-                communication_time, \
-                math.ceil(max([max(_) for _ in chip_node_load]) / cp.B), \
-                math.ceil(global_memory_load / cp.global_memory_bandwidth), \
-                math.ceil(most_expensive_request / cp.B), \
-                max(max(_) for _ in cluster_internel_communication_cost), \
-                sum([load_time_needed_list[i] * duplicate_times[i] for i in range(nodecnt)])
+                max(calc_time_list)#, \
+                # communication_time, \
+                # math.ceil(max([max(_) for _ in chip_node_load]) / cp.B), \
+                # math.ceil(global_memory_load / cp.global_memory_bandwidth), \
+                # math.ceil(most_expensive_request / cp.B), \
+                # max(max(_) for _ in cluster_internel_communication_cost), \
+                # sum([load_time_needed_list[i] * duplicate_times[i] for i in range(nodecnt)])
 
         best_time = math.inf
         best_allocation = None
-        best_pack = None
+        # best_pack = None
         
         if partition_mode==0 or partition_mode==1:
             
@@ -428,7 +428,7 @@ def calc_best_strategy_on_chip(
                 if cur_time < best_time:
                     best_allocation = allocation
                     best_time = cur_time
-                    best_pack = pack
+                    # best_pack = pack
                 calc_time_list_id = [(v, i) for i, v in enumerate(calc_time_list)]
                 calc_time_list_id.sort()
                 calc_time_list_id.reverse()
@@ -469,11 +469,11 @@ def calc_best_strategy_on_chip(
             calc_time_list, cur_time = pack[0], pack[1]
             best_allocation = allocation
             best_time = cur_time
-            best_pack = pack
+            # best_pack = pack
         if best_time < best_time_all_patterns:
             best_time_all_patterns = best_time
             best_allocation_all_patterns = best_allocation
-            best_pack_all_patterns = best_pack
+            # best_pack_all_patterns = best_pack
 
     # 传进来的nodes已经重新排序了，所以重新传回去
-    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list, communicate_on_chip, best_pack_all_patterns
+    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list, communicate_on_chip #, best_pack_all_patterns

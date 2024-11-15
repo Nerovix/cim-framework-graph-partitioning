@@ -124,7 +124,7 @@ def process(onnx_graph,partition_mode=0):
                     s = iprefix - jprefix
                     s = [i for i in range(conv_node_cnt) if s >> i & 1 == 1]
                     # s 里面是按照conv重编号的
-                    cost, alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset,_ = calc_best_strategy_on_chip(
+                    cost, alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset = calc_best_strategy_on_chip(
                         s, re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
                     if dp[j] + cost < dp[i]:
                         dp[i] = dp[j] + cost
@@ -151,14 +151,14 @@ def process(onnx_graph,partition_mode=0):
         while u<len(sorted_nodes_re_id):
             l=u
             while u<len(sorted_nodes_re_id):
-                cost, alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset,_ = calc_best_strategy_on_chip(
+                cost, alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset = calc_best_strategy_on_chip(
                     [sorted_nodes_re_id[i] for i in range(l,u+1)], re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph,partition_mode)
                 if cost==math.inf:
                     break
                 else:
                     u+=1
             u-=1
-            cost, alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset,_ = calc_best_strategy_on_chip(
+            cost, alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset = calc_best_strategy_on_chip(
                 [sorted_nodes_re_id[i] for i in range(l,u+1)], re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph,partition_mode)
             stages.append((alloc,nodes_re_id,cores_needed_list,communicate_on_chip_edgeset))
             u+=1
