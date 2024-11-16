@@ -3,10 +3,12 @@ from onnx import shape_inference
 from onnx import GraphProto, ModelProto, NodeProto
 
 
+mem = dict()
 def load_onnx_model(file_path):
     model = onnx.load(file_path)
     inferred_model = shape_inference.infer_shapes(model)
     graph = inferred_model.graph
+    mem=dict()
     return graph
 
 
@@ -21,8 +23,6 @@ def print_graph_nodes(graph):
         print()
         '''
 
-
-mem = dict()
 
 
 def get_tensor_shape(onnx_graph, tensor_name):

@@ -81,8 +81,8 @@ def calc_cores_and_time_needed(onnx_graph, node):
         duplicate_times = cp.K // math.ceil(K_h * K_w * C_in / (cp.H * cp.m))
         # print('duplicate times:', duplicate_times)
 
-        cores_needed = math.ceil(C_out / cp.channels_on_a_core)
-        # print(C_out, cp.channels_on_a_core)
+        cores_needed = math.ceil(C_out / cp.channels_on_a_core())
+        # print(C_out, cp.channels_on_a_core())
         # print('cores needed:', cores_needed)
 
         # 需要计算周期：img2col之后有H_out * W_out次输入
@@ -108,7 +108,7 @@ def calc_cores_and_time_needed(onnx_graph, node):
             8 /  # 除8转Byte
             cp.global_memory_bandwidth) * duplicate_times
 
-        # print(cores_needed, C_out, cp.channels_on_a_core)
+        # print(cores_needed, C_out, cp.channels_on_a_core())
         return cores_needed, time_needed, load_time_needed
 
     raise Exception('you must be joking, this is NOT a conv op')
@@ -143,8 +143,7 @@ def calc_best_strategy_on_chip(
         re_id_to_node_id,
         input_data_conv_node_re_id,  # 外层提前整理好的，需要直接从图片读数据的第一个节点的conv重编号
         output_data_conv_node_re_id,  # 外层提前整理好的，需要写数据给global，给后面的fc用的节点的conv重编号
-        onnx_graph,
-        partition_mode=0):
+        onnx_graph):
 
     # print("-------------------lets go--------------------")
 
@@ -242,7 +241,7 @@ def calc_best_strategy_on_chip(
                 assert len(allocation[i][sender]) == cores_needed_list[i]
                 for core in allocation[i][sender]:
                     use_channel = min(
-                        channelcnt, cp.channels_on_a_core)
+                        channelcnt, cp.channels_on_a_core())
                     chip_node_load[core[0]][core[1]] += use_channel * \
                         shape[2] * shape[3] * cp.feature_width // 8  # 转Byte
                     channelcnt -= use_channel
@@ -261,7 +260,7 @@ def calc_best_strategy_on_chip(
                     channelcnt = shape[1]
                     while channelcnt > 0:
                         use_channel = min(
-                            channelcnt, cp.channels_on_a_core)
+                            channelcnt, cp.channels_on_a_core())
                         accumulate_load[p] += use_channel * \
                             shape[2] * shape[3] * cp.feature_width // 8
                         p = (p + 1) % len(accumulate_load)
@@ -293,7 +292,7 @@ def calc_best_strategy_on_chip(
                 channelcnt = shape[1]
                 for icoreid, icore in enumerate(allocation[i][sender]):
                     use_channel = min(
-                        channelcnt, cp.channels_on_a_core)
+                        channelcnt, cp.channels_on_a_core())
                     # 挑一个发，然后内部传
                     jcoreid = icoreid % len(allocation[j][receiver])
                     jcore = allocation[j][receiver][jcoreid]
@@ -411,7 +410,7 @@ def calc_best_strategy_on_chip(
         best_allocation = None
         # best_pack = None
         
-        if partition_mode==0 or partition_mode==1:
+        if cp.partition_mode==0 or cp.partition_mode==1:
             
             # print("\ntry a new pattern:")
             while True:
@@ -463,7 +462,7 @@ def calc_best_strategy_on_chip(
             #         load_time_needed_all}")
             # print(f"load time: {load_time_needed_all}")
         else:
-            assert partition_mode==2
+            assert cp.partition_mode==2
             allocation = put_nodes_on_chip(duplicate_times)
             pack = get_cost_for_an_allocation(allocation)
             calc_time_list, cur_time = pack[0], pack[1]

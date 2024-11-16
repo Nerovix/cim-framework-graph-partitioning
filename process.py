@@ -6,16 +6,16 @@ import cimpara as cp
 import math
 
 
-def process(onnx_graph,partition_mode=0):
+def process(onnx_graph):
     graph = build_graph(onnx_graph)
 
     is_conv_node = []
     is_fc_node = []
     for n in onnx_graph.node:
 
-        if n.op_type == 'Conv':
-            print(n.input[1])
-            print(n, get_tensor_shape(onnx_graph, n.input[1])[1])
+        # if n.op_type == 'Conv':
+        #     print(n.input[1])
+        #     print(n, get_tensor_shape(onnx_graph, n.input[1])[1])
 
         if n.op_type == 'Conv' and get_tensor_shape(
                 onnx_graph, n.input[1])[1] != 1:  # pointwise或者分组卷积
@@ -30,13 +30,13 @@ def process(onnx_graph,partition_mode=0):
         else:
             is_fc_node.append(0)
 
-    print(is_conv_node)
+    # print(is_conv_node)
 
     belong_node = get_belong_node(graph, is_conv_node, is_fc_node)
 
-    print(is_conv_node)
+    # print(is_conv_node)
 
-    print([(i, v)for i, v in enumerate(belong_node)])
+    # print([(i, v)for i, v in enumerate(belong_node)])
 
     conv_node_re_id = [0] * len(is_conv_node)  # 0-based
     re_id_to_node_id = []
@@ -47,7 +47,7 @@ def process(onnx_graph,partition_mode=0):
             re_id_to_node_id.append(i)
             conv_node_cnt += 1
 
-    print(conv_node_cnt)
+    # print(conv_node_cnt)
     re_id_graph = [[] for _ in range(conv_node_cnt)]
 
     input_data_conv_node_re_id = dict()
@@ -75,7 +75,7 @@ def process(onnx_graph,partition_mode=0):
             input_data_conv_node_re_id[conv_node_re_id[ibel]] = get_tensor_shape(
                 onnx_graph, onnx_graph.input[0].name)
 
-    print(re_id_graph)
+    # print(re_id_graph)
 
     re_id_rev_graph = [[] for _ in range(conv_node_cnt)]
     for i in range(conv_node_cnt):
@@ -85,7 +85,7 @@ def process(onnx_graph,partition_mode=0):
     # print(onnx_graph.input[0].type.tensor_type.shape)
 
     prefixes_bitmask_re_id = find_all_prefixes(re_id_graph)
-    print(prefixes_bitmask_re_id)
+    # print(prefixes_bitmask_re_id)
     
     # s=[0,1]
     # cost1, alloc1, nodes_re_id1, cores_needed_list1, communicate_on_chip_edgeset,pack1 = calc_best_strategy_on_chip(\
@@ -104,7 +104,7 @@ def process(onnx_graph,partition_mode=0):
     
     stages=[]
 
-    if partition_mode==0:
+    if cp.partition_mode==0:
         dp = [math.inf] * len(prefixes_bitmask_re_id)
         dpf = [-1] * len(dp)
         dpalloc = [0] * len(dp)
@@ -118,7 +118,7 @@ def process(onnx_graph,partition_mode=0):
                 # if i > 0 and j < dpf[i - 1]:
                 # continue
                 if i != j and iprefix & jprefix == jprefix:
-                    print("dp", i, iprefix, j, jprefix)
+                    # print("dp", i, iprefix, j, jprefix)
                     if dp[j] == math.inf:
                         continue
                     s = iprefix - jprefix
@@ -135,7 +135,7 @@ def process(onnx_graph,partition_mode=0):
                             cores_needed_list,
                             communicate_on_chip_edgeset)
 
-            print(dpf[i])
+            # print(dpf[i])
 
         u = len(prefixes_bitmask_re_id) - 1
         while prefixes_bitmask_re_id[u] != 0:
@@ -152,21 +152,21 @@ def process(onnx_graph,partition_mode=0):
             l=u
             while u<len(sorted_nodes_re_id):
                 cost, alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset = calc_best_strategy_on_chip(
-                    [sorted_nodes_re_id[i] for i in range(l,u+1)], re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph,partition_mode)
+                    [sorted_nodes_re_id[i] for i in range(l,u+1)], re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
                 if cost==math.inf:
                     break
                 else:
                     u+=1
             u-=1
             cost, alloc, nodes_re_id, cores_needed_list, communicate_on_chip_edgeset = calc_best_strategy_on_chip(
-                [sorted_nodes_re_id[i] for i in range(l,u+1)], re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph,partition_mode)
+                [sorted_nodes_re_id[i] for i in range(l,u+1)], re_id_graph, re_id_rev_graph, re_id_graph_edgeset, re_id_to_node_id, input_data_conv_node_re_id, output_data_conv_node_re_id, onnx_graph)
             stages.append((alloc,nodes_re_id,cores_needed_list,communicate_on_chip_edgeset))
             u+=1
 
                     
 
     for stage in stages:
-        s='\t['
+        s='['
         for i in range(len(stage[0])):
             s+=str(stage[1][i])
             s+='-'

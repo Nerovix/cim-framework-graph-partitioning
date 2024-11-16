@@ -53,7 +53,7 @@ def get_instrctions_for_a_stage(
                     'weight_replica_id': j,
                     'instructions': []
                 }
-                use_channel = min(channelcnt, cp.channels_on_a_core)
+                use_channel = min(channelcnt, cp.channels_on_a_core())
                 instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                     'op': 'read',
                     'attr': {
@@ -103,7 +103,7 @@ def get_instrctions_for_a_stage(
             assert icores is not None, 'wtf global to global wtf is this'
             channelcnt = shape[1]
             for icore in icores:
-                use_channel = min(cp.channels_on_a_core, channelcnt)
+                use_channel = min(cp.channels_on_a_core(), channelcnt)
                 instructions[f'core_{icore[0]}_{icore[1]}']['instructions'].append({
                     'op': 'write',
                     'attr': {
@@ -122,7 +122,7 @@ def get_instrctions_for_a_stage(
             p = 0
             channelcnt = shape[1]
             for q in range(len(icores)):
-                use_channel = min(channelcnt, cp.channels_on_a_core)
+                use_channel = min(channelcnt, cp.channels_on_a_core())
                 accumulate_load_channelcnt[p] += use_channel
                 frm = icores[q]
                 to = jcores[p]
@@ -210,9 +210,9 @@ def get_instrctions_for_a_stage(
                     tensor_name = tensor_name_prefix + \
                         f'_in_cluster_part_{src}'
                     add_send_receive(frm, to, src, tensor_name)
-    print('nodes_re_id:', nodes_re_id)
-    print('id_topsort:', id_topsort)
-    print()
+    # print('nodes_re_id:', nodes_re_id)
+    # print('id_topsort:', id_topsort)
+    # print()
     for k in range(cp.batch_size):
 
         for i_topsort_id in range(nodecnt):
@@ -266,7 +266,7 @@ def get_instrctions_for_a_stage(
                 op_type = onnx_graph.node[nodeid].op_type
                 channelcnt = weight_shape[0]
                 for coreid in range(core_num):
-                    use_channel = min(channelcnt, cp.channels_on_a_core)
+                    use_channel = min(channelcnt, cp.channels_on_a_core())
                     assert use_channel != 0
                     core = allocation[i][runner][coreid]
                     channelcnt -= use_channel
@@ -310,16 +310,9 @@ def get_instrctions_for_a_stage(
                                     'strides': list(strides)
                                 }
                             })
-                    elif op_type == 'Add':
+                    elif op_type == 'Add' and onnx_graph.node[nodeid].input[1].find('zero_point')==-1:
                         instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                             'op': 'add',
-                            'attr': {
-                                'shape': [1, use_channel, output_shape[2], output_shape[3]]
-                            }
-                        })
-                    elif op_type == 'Relu':
-                        instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
-                            'op': 'relu',
                             'attr': {
                                 'shape': [1, use_channel, output_shape[2], output_shape[3]]
                             }
