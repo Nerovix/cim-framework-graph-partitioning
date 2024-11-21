@@ -7,6 +7,7 @@ sys.setrecursionlimit(100000)
 
 def main():
     print(f'running with onnx_file_path = {cp.onnx_file_path}, T = {cp.T}, B = {cp.B}, partition_mode = {cp.partition_mode}')
+    print(f'running with onnx_file_path = {cp.onnx_file_path}, T = {cp.T}, B = {cp.B}, partition_mode = {cp.partition_mode}',file=sys.stderr)
 
     onnx_graph = load_onnx_model(cp.onnx_file_path)
 
@@ -19,7 +20,8 @@ def main():
     with open(cp.instructions_file_path, 'w') as json_file:
         print(json_instructions, file=json_file)
 
-    print('its done its done its done its done its done its done its done its done akkdfalsdfja;sldf')
+    print('done\n')
+    
 # '''
     
 

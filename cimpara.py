@@ -1,5 +1,5 @@
 
-onnx_file_path = "./model_files/mobilenet-simplified.onnx"
+onnx_file_path = "./model_files/efficientnet-simplified.onnx"
 
 instructions_file_path = 'instructions.json'
 
@@ -20,9 +20,10 @@ global_memory_bandwidth = 64
 
 
 # 0: dp
-# 1: 先尽可能往上放，然后再复制
-# 2: 不复制，一直往上放，直到放不动。纯纯的比1还蠢
-partition_mode = 1
+# 1: baseline1，先尽可能往上放，然后再复制
+# 2: baseline2，不复制，一直往上放，直到放不动。
+# >3：更多奇奇怪怪
+partition_mode = 3
 
 
 batch_size = 8

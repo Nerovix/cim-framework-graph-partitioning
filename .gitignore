@@ -20,4 +20,5 @@ venv/
 # 太大
 model_files/
 instruction_files/
+instruction_files_extra/
 ./instructions.json

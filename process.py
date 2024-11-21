@@ -104,7 +104,7 @@ def process(onnx_graph):
     
     stages=[]
 
-    if cp.partition_mode==0:
+    if cp.partition_mode in [0,3,4,5]:
         dp = [math.inf] * len(prefixes_bitmask_re_id)
         dpf = [-1] * len(dp)
         dpalloc = [0] * len(dp)
