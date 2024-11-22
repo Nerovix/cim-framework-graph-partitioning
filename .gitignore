@@ -17,5 +17,8 @@ venv/
 *.swo
 *.swn
 
-# 模型太大gayhub不给我传
+# 太大
 model_files/
+instruction_files/
+instruction_files_extra/
+./instructions.json

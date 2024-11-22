@@ -1,50 +1,29 @@
-from read_file import load_onnx_model,print_graph_nodes
-from process_alexnet_vgg import process_alexnet_vgg
+import json
+from read_file import load_onnx_model
+from process import process
+import cimpara as cp
 import sys
 sys.setrecursionlimit(100000)
 
+def main():
+    print(f'running with onnx_file_path = {cp.onnx_file_path}, T = {cp.T}, B = {cp.B}, partition_mode = {cp.partition_mode}')
+    print(f'running with onnx_file_path = {cp.onnx_file_path}, T = {cp.T}, B = {cp.B}, partition_mode = {cp.partition_mode}',file=sys.stderr)
+
+    onnx_graph = load_onnx_model(cp.onnx_file_path)
+
+    # print_graph_nodes(onnx_graph)
+
+    instructions = process(onnx_graph)
+    # print(instructions)
+    # '''
+    json_instructions = json.dumps(instructions, ensure_ascii=False, indent=4)
+    with open(cp.instructions_file_path, 'w') as json_file:
+        print(json_instructions, file=json_file)
+
+    print('done\n')
+    
+# '''
+    
+
 if __name__ == "__main__":
-    
-    # cores_needed=[10,6,9,4,5,3]
-    # allo=put_nodes_on_chip(cores_needed)
-    # # print(allo)
-    # print (cores_needed)
-    # print_allocation(allo)
-    
-    
-    
-    model_name=''
-
-    # onnx_file_path = "./model_files/bvlcalexnet-12-qdq.onnx"
-    # onnx_file_path = "./model_files/mobilenetv2-12-qdq.onnx"
-    onnx_file_path = "./model_files/resnet50-v1-12-qdq.onnx"
-    # onnx_file_path = "./model_files/resnet18-v1-.7.onnx"
-    # onnx_file_path = "./model_files/vgg16-12-qdq.onnx"
-    # onnx_file_path = "./model_files/efficientnet-lite4-11-qdq.onnx"
-    
-    
-    
-    onnx_graph = load_onnx_model(onnx_file_path)
-    
-    
-    if model_name=='':
-        if onnx_file_path.lower().find('alexnet')!=-1:
-            model_name='alexnet'
-        elif onnx_file_path.lower().find('mobilenet')!=-1:
-            model_name='mobilenet'
-        elif onnx_file_path.lower().find('resnet')!=-1:
-            model_name='resnet'
-        elif onnx_file_path.lower().find('vgg')!=-1:
-            model_name='vgg'
-    
-    assert model_name != '', 'Model name is required.'
-    
-    
-    print_graph_nodes(onnx_graph)
-
-    if model_name=='alexnet' or model_name=='vgg' or model_name=='resnet':
-        process_alexnet_vgg(onnx_graph)
-        
-
-        
-
+    main()
