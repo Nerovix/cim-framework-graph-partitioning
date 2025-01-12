@@ -60,17 +60,38 @@ def get_belong_node(graph, is_conv_node, is_fc_node):
     for i in main_chain:
         in_main_chain[i] = 1
 
+    # print(main_chain)
+    main_chain_edge = dict()
+    for i in range(len(main_chain) - 1):
+        main_chain_edge[(main_chain[i], main_chain[i + 1])] = True
+        main_chain_edge[(main_chain[i + 1], main_chain[i])] = True
+
     # 残差的加法一定在主链上。先单独对主链算最近点，挂上去
-    # 然后剩下的点就都是残差卷积和残差卷积旁边的小算子，直接也就近挂上去
     belong_node = [-1] * len(graph)
-    q = deque([i for i in range(len(graph)) if is_conv_node[i] == 1])
+    q = deque([i for i in range(len(graph)) if is_conv_node[i]
+              == 1 and in_main_chain[i] == 1])
     while q:
         x = q.popleft()
         if belong_node[x] == -1:
             belong_node[x] = x
         for y in graph[x][0] + graph[x][1]:
-            if in_main_chain[y] == in_main_chain[x] and \
-                    belong_node[y] == -1 and is_fc_node[y] == 0:
+            if belong_node[y] != -1:
+                continue
+            if (x, y) in main_chain_edge and is_fc_node[y] == 0:
+                belong_node[y] = belong_node[x]
+                q.append(y)
+
+    # 然后剩下的点就都是残差卷积和残差卷积旁边的小算子，直接也就近挂上去
+    q = deque([i for i in range(len(graph)) if is_conv_node[i]
+              == 1 and in_main_chain[i] == 0])
+    while q:
+        x = q.popleft()
+        if belong_node[x] == -1:
+            belong_node[x] = x
+        for y in graph[x][0] + graph[x][1]:
+            if belong_node[y] != -1:
+                continue
+            if (x, y) not in main_chain_edge and is_fc_node[y] == 0:
                 belong_node[y] = belong_node[x]
                 q.append(y)
 
@@ -102,6 +123,8 @@ def get_belong_node(graph, is_conv_node, is_fc_node):
 
 # find all dependency prefixes for dp
 # 依托史
+
+
 def find_all_prefixes(graph_re_id):
     node_cnt = len(graph_re_id)
     indeg = [0] * node_cnt
@@ -130,6 +153,8 @@ def find_all_prefixes(graph_re_id):
     return prefixes_list
 
 # 把计算图片段划分成链
+
+
 def split_to_chain(conv_node_re_id, re_id_graph_edgeset):
     nodecnt = len(conv_node_re_id)
     simplified_graph = [[] for _ in range(nodecnt)]
@@ -139,10 +164,10 @@ def split_to_chain(conv_node_re_id, re_id_graph_edgeset):
     for i in range(nodecnt):
         for j in range(nodecnt):
             if re_id_graph_edgeset.get(
-                    (conv_node_re_id[i], conv_node_re_id[j]))!=None:
+                    (conv_node_re_id[i], conv_node_re_id[j])) is not None:
                 simplified_graph[i].append(j)
                 indeg[j] += 1
-    res=[]
+    res = []
     while usedcnt < nodecnt:
         # 就贪心，每次取出最长链
         q = deque()
@@ -164,23 +189,37 @@ def split_to_chain(conv_node_re_id, re_id_graph_edgeset):
                 indeg[y] -= 1
                 if indeg[y] == 0:
                     q.append(y)
-        ed=-1
+        ed = -1
         for i in range(nodecnt):
             if not used[i]:
-                if ed==-1 or dis[i]>dis[ed]:
-                    print(ed,i)
-                    ed=i
-        m=dis[ed]
-        chain=[]
-        while ed!=-1:
+                if ed == -1 or dis[i] > dis[ed]:
+                    ed = i
+        m = dis[ed]
+        chain = []
+        while ed != -1:
             chain.append(conv_node_re_id[ed])
-            used[ed]=True
-            ed=last[ed]
-        
-        assert(len(chain)==m)
-        usedcnt+=len(chain)
+            used[ed] = True
+            ed = last[ed]
+
+        assert (len(chain) == m)
+        usedcnt += len(chain)
         chain.reverse()
         res.append(chain)
     return res
 
 
+def topsort(graph):
+    ind = [len(_[0]) for _ in graph]
+    q = deque([i for i, v in enumerate(ind) if v == 0])
+
+    ans = []
+
+    while q:
+        x = q.popleft()
+        ans.append(x)
+        for y in graph[x][1]:
+            ind[y] -= 1
+            if ind[y] == 0:
+                q.append(y)
+
+    return ans
