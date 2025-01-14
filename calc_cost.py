@@ -1,37 +1,28 @@
-from collections import deque
 import math
-import onnx
-from onnx import shape_inference
-from onnx import GraphProto, ModelProto, NodeProto
+from logging_config import logger
 import cimpara as cp
 from read_file import get_tensor_shape
 from graph import split_to_chain
 
 '''
-重新理清楚
-
-activation_width激活值位宽
-weight_width权重位宽
+feature_width: bit width of features
+weight_width: bit width of weights
 
 Element:
-每个element行m列n
-m次(m*activation_width个周期)可进行1个m*(n/weight_width)的mvm
+Each element has m rows and n columns
+m times (m * feature_width cycles) can perform one m*(n/weight_width) mvm
 
 Macro:
-每个macro为H*W,
-同一行(每W个)element共享输入, H行独立, 然后累加
-每m次可进行1个(H*m)*(n*W/weight_width)的mvm
-
+Each macro is H*W,
+Elements in the same row (every W elements) share inputs, H rows are independent, then accumulate
+m times can perform one (H*m)*(n*W/weight_width) mvm
 
 Core:
-每个K*T
-T个macro groups, 现在存不同权重
-同一行(每K个)element共享输入, T行独立, 然后累加
-每m次可进行1个相同向量, 不同矩阵(H*m*T)*(n*W/weight_width*K)的mvm
-    i.e. 进行(n*W/weight_width*K)个channel的计算, 耗时m*activation_width
-
-
-
+Each K*T
+T macro groups, currently storing different weights
+Elements in the same row (every K elements) share inputs, T rows are independent, then accumulate
+m times can perform one same vector, different matrices (H*m*T)*(n*W/weight_width*K) mvm
+    i.e., performing (n*W/weight_width*K) channels of computation, taking m*feature_width time
 '''
 
 
@@ -41,11 +32,10 @@ def calc_cores_and_time_needed(onnx_graph, node):
         [C_out, C_in, K_h, K_w] = get_tensor_shape(onnx_graph, node.input[1])
 
         group = [attr.i for attr in node.attribute if attr.name == 'group'][0]
-        assert group == 1, "jesus, depthwise separable conv is too advanced for my shitty stupid code"
+        assert group == 1, "Depthwise separable convolution is not considered."
 
         if C_in == 1:
-            raise Exception(
-                "whhhaaaat??? this seems to be a depthwise conv and shouldn't be considered here!")
+            assert (0), "Depthwise convolution should not be here."
 
         N = 1
 
@@ -56,111 +46,83 @@ def calc_cores_and_time_needed(onnx_graph, node):
         if not P:
             P = [0, 0, 0, 0]
 
-        # print("conv layer:")
-        # print("[N, C_in, H, W]" + str([N, C_in, H, W]))
-        # print("[C_out, C_in, K_h, K_w] " + str([C_out, C_in, K_h, K_w]))
-        # print("S" + str(S))
-        # print("P" + str(P))
-
         H_out = (H + P[0] + P[2] - K_h) // S[0] + 1
         W_out = (W + P[1] + P[3] - K_w) // S[1] + 1
-
-        # print(H_out)
-        # print(W_out)
 
         # matA = [N * H_out * W_out, C_in * K_h * K_w]
         # matB = [C_in * K_h * K_w, C_out]
 
         if cp.H * cp.m * cp.K < K_h * K_w * C_in:
-            raise Exception('holy the conv op is tooooooo big')
+            raise Exception('The convolution operation is too large.')
 
-        # 核内允许权重复制的次数：每个channel_out需要K_h * K_w * C_in个权重
-        # 每个macro group可以放下H*m个权重
-        # 因此放下一个channel_out需要ceil(K_h * K_w * C_in  / (H * m))个macro group
-        # 因此能放下floor(K/ceil(...))次权重复制
-        duplicate_times = cp.K // math.ceil(K_h * K_w * C_in / (cp.H * cp.m))
-        # print('duplicate times:', duplicate_times)
+        # replicate times allowed in the core:
+        # Each C_out requires K_h * K_w * C_in weights
+        # Each macro group can hold H * m weights
+        # Therefore, placing a C_out requires ceil(K_h * K_w * C_in / (H * m)) macro groups
+        # Therefore, floor(K / ceil(...)) weight copies can be placed
+
+        replicate_times = cp.K // math.ceil(K_h * K_w * C_in / (cp.H * cp.m))
 
         cores_needed = math.ceil(C_out / cp.channels_on_a_core())
-        # print(C_out, cp.channels_on_a_core())
-        # print('cores needed:', cores_needed)
 
-        # 需要计算周期：img2col之后有H_out * W_out次输入
-        # 每m * activation_width周期可以计算一次
-        # 然后除以权重复制次数
-        # batchsize留到分配core的时候再考虑
-        # 因为涉及到core层面的权重复制
+        # Required computation cycles:
+        # H_out * W_out inputs after img2col
+        # Each computation requires m * feature_width cycles
+        # Then divide by the number of weight replications
+        # Batch size will be considered when allocating cores
+        # as it involves weight replication at the core level
 
         time_needed = math.ceil(
             H_out *
             W_out *
             cp.m *
             cp.feature_width /
-            duplicate_times)
+            replicate_times)
 
-        # 把weight load上去需要的时间
+        # Time needed to load all weights
         load_time_needed = math.ceil(
             C_out *
             C_in *
             K_h *
             K_w *
             cp.weight_width /
-            8 /  # 除8转Byte
-            cp.global_memory_bandwidth) * duplicate_times
+            8 /  # bits to Byte
+            cp.global_memory_bandwidth) * replicate_times
 
         # print(cores_needed, C_out, cp.channels_on_a_core())
         return cores_needed, time_needed, load_time_needed
 
-    raise Exception('you must be joking, this is NOT a conv op')
-
-
-'''
-仔细整理一下现在的策略
-
-传进来一个计算图片段。首先，贪心做个计算图片段的链划分
-比如
-A---B---C---D---E
-    |       |
-    ----G---H
-这种，先划分成ABCDE和GH，然后就按照ABCDEGH这样的顺序往pattern上面放
-这样尽可能连续的在一起，然后不连续的，比如BG、DH之间就用global通信。
-这样就确定了往pattern上放的顺序
-
-然后要做权重复制。代价是max_所有节点{计算时间*batchsize/此节点权重复制次数}+通信时间(压力最大的路由器)
-权重复制越多，通信时间就越高，计算时间就越少
-考虑每次取出计算时间最大的节点，然后给他加权重复制的次数，然后重新算代价。这个代价的计算时间应该变少了，通信时间应该增加了
-直到新的代价比权重复制之前还要大，说明复制太多了，就停下
-
-我发现这里好像又没有必要让权重复制的次数必须是二的幂次了，所以就先不要求是二的幂次
-'''
+    raise Exception('This is not a convolution operator.')
 
 
 def calc_best_strategy_on_chip(
-        nodes_re_id,
-        re_id_graph,
-        re_id_rev_graph,
-        re_id_graph_edgeset,  # 一个dict，key是一个二元组描述一条边，编号是conv重编号。value是边上数据的shape
-        re_id_to_node_id,
-        input_data_conv_node_re_id,  # 外层提前整理好的，需要直接从图片读数据的第一个节点的conv重编号
-        output_data_conv_node_re_id,  # 外层提前整理好的，需要写数据给global，给后面的fc用的节点的conv重编号
+        nodes_reassigned_id,
+        reassigned_id_graph,
+        reassigned_id_rev_graph,
+        reassigned_id_graph_edgeset,  # A dict, the key is a two-tuple describing an edge, the number is the conv renumber. The value is the shape of the edge data.
+        reassigned_id_to_node_id,
+        input_data_conv_node_reassigned_id,  # see process.py for more details
+        output_data_conv_node_reassigned_id,  # see process.py for more details
         onnx_graph):
 
-    # print("-------------------lets go--------------------")
+    logger.debug("Start calc_best_strategy_on_chip, nodes_reassigned_id: " + str(nodes_reassigned_id))
 
-    allnodescnt = len(re_id_graph)
-    in_nodes_re_id = [0] * allnodescnt
-    for i in nodes_re_id:
-        in_nodes_re_id[i] = 1
-    nodecnt = len(nodes_re_id)
+    allnodescnt = len(reassigned_id_graph)
+    in_nodes_reassigned_id = [0] * allnodescnt
+    for i in nodes_reassigned_id:
+        in_nodes_reassigned_id[i] = 1
+    nodecnt = len(nodes_reassigned_id)
     pattern_pos_lists = cp.pattern_pos_lists
 
-    # 先确定往pattern上放的顺序
-    chain_list = split_to_chain(nodes_re_id, re_id_graph_edgeset)
-    nodes_re_id = []
+    # Determine the order to place on the pattern:
+    # Split the graph into chains, and then place the chains on the chip
+    # By doing so, we maximize on-chip communication and minimize global memory communication
+    chain_list = split_to_chain(nodes_reassigned_id, reassigned_id_graph_edgeset)
+    nodes_reassigned_id = []
     communicate_on_chip = dict()
     for chain in chain_list:
-        nodes_re_id += chain
-        # 顺便确定哪些关系用片上通信，哪些用片外
+        nodes_reassigned_id += chain
+        # Also determine which dependency edge use on-chip communication, which use global memory
         for i in range(len(chain) - 1):
             communicate_on_chip[(chain[i], chain[i + 1])] = True
 
@@ -168,47 +130,46 @@ def calc_best_strategy_on_chip(
     time_needed_list = []
     load_time_needed_list = []
 
-    for node_re_id in nodes_re_id:
-        node = onnx_graph.node[re_id_to_node_id[node_re_id]]
+    for node_reassigned_id in nodes_reassigned_id:
+        node = onnx_graph.node[reassigned_id_to_node_id[node_reassigned_id]]
         cores_needed, time_needed, load_time_needed = calc_cores_and_time_needed(
             onnx_graph, node)
         cores_needed_list.append(cores_needed)
         time_needed_list.append(time_needed)
         load_time_needed_list.append(load_time_needed)
 
-    # 先特判：直接就放不下
+    # Special case: cannot be placed on the chip
     if sum(cores_needed_list) > cp.C:
+        logger.debug("Cannot be placed on the chip, no enough cores.")
         return math.inf, None, None, None, None
 
-    # print("nodes_re_id:" + str(nodes_re_id))
-    # print("cores_needed_list:" + str(cores_needed_list))
-    # print("time_needed_list:" + str(time_needed_list))
-    # print("load_time_needed_list:" + str(load_time_needed_list))
-    # print(re_id_graph_edgeset)
+    logger.debug('nodes_reassigned_id:' + str(nodes_reassigned_id))
+    logger.debug('cores_needed_list:' + str(cores_needed_list))
+    logger.debug('time_needed_list:' + str(time_needed_list))
+    logger.debug('load_time_needed_list:' + str(load_time_needed_list))
+    logger.debug('reassigned_id_graph_edgeset:' + str(reassigned_id_graph_edgeset))
 
     def calc_dis(core0, core1):
         return math.fabs(core0[0] - core1[0]) + math.fabs(core0[1] - core1[1])
 
     best_time_all_patterns = math.inf
     best_allocation_all_patterns = None
-    # best_pack_all_patterns = None
-    for pattern_pos_list in pattern_pos_lists:
-        duplicate_times = [1] * nodecnt
+    for pattern_pos_list_idx, pattern_pos_list in enumerate(pattern_pos_lists):
+        logger.debug(f'Try pattern {pattern_pos_list_idx}(0-index, {len(pattern_pos_lists)} in total):')
+        replicate_times = [1] * nodecnt
 
-        # 这个函数简单按照core层的权重复制次数把节点分配到chip上
-        def put_nodes_on_chip(duplicate_times):
+        # This function simply allocates nodes to the chip based on the core-level weight replication times
+        def put_nodes_on_chip(replicate_times):
             assert len(pattern_pos_list) == cp.C
-
-            # 先看节点够不够
-            if sum([cores_needed_list[i] * duplicate_times[i]
+            # First check if there are enough nodes
+            if sum([cores_needed_list[i] * replicate_times[i]
                    for i in range(nodecnt)]) > cp.C:
                 return None
-
             j = 0
             allocation = []
             for i in range(nodecnt):
                 alloc = []
-                for _ in range(duplicate_times[i]):
+                for _ in range(replicate_times[i]):
                     alc = []
                     for __ in range(cores_needed_list[i]):
                         alc.append(pattern_pos_list[j])
@@ -216,7 +177,7 @@ def calc_best_strategy_on_chip(
                     alloc.append(alc)
                 allocation.append(alloc)
 
-            # allocation[i][j][k]=(x,y)表示第i个node，第j个duplicate，第k个core的位置是(x,y)
+            # allocation[i][j][k]=(x, y) represents the i-th node's j-th replicate's k-th core are allocated to core (x, y) on chip
             return allocation
 
         def get_cost_for_an_allocation(allocation):
@@ -232,18 +193,18 @@ def calc_best_strategy_on_chip(
             cluster_internel_communication_cost = [
                 [0] * len(allocation[i]) for i in range(len(allocation))]
 
-            # 计算节点间的通信负载
+            # Calculate communication load between nodes
 
             def add_load_sender(i, k, shape):
                 nonlocal chip_node_load
-                sender = k % duplicate_times[i]
+                sender = k % replicate_times[i]
                 channelcnt = shape[1]
                 assert len(allocation[i][sender]) == cores_needed_list[i]
                 for core in allocation[i][sender]:
                     use_channel = min(
                         channelcnt, cp.channels_on_a_core())
                     chip_node_load[core[0]][core[1]] += use_channel * \
-                        shape[2] * shape[3] * cp.feature_width // 8  # 转Byte
+                        shape[2] * shape[3] * cp.feature_width // 8  # bit to Byte
                     channelcnt -= use_channel
 
                 assert channelcnt == 0
@@ -251,11 +212,11 @@ def calc_best_strategy_on_chip(
             def add_load_receiver(j, k, shape, is_from_global):
                 nonlocal chip_node_load
                 nonlocal cluster_internel_communication_cost
-                receiver = k % duplicate_times[j]
-                # 用来暂时累加每个接收核受到的数据量
+                receiver = k % replicate_times[j]
+                # Temporarily accumulate the load received by each receiving core
                 accumulate_load = [0] * len(allocation[j][receiver])
                 if not is_from_global:
-                    # 来自其他节点，就按照每个来源往上一个个轮盘累加
+                    # From other nodes, accumulate in a round-robin manner
                     p = 0
                     channelcnt = shape[1]
                     while channelcnt > 0:
@@ -266,7 +227,7 @@ def calc_best_strategy_on_chip(
                         p = (p + 1) % len(accumulate_load)
                         channelcnt -= use_channel
                 else:
-                    # 来自global，可以自己尽可能均匀地划分
+                    # From global memory, distribute as evenly as possible
                     remainder = shape[1] % len(accumulate_load)
                     for i in range(len(accumulate_load)):
                         use_channel = shape[1] // len(accumulate_load) + \
@@ -280,20 +241,20 @@ def calc_best_strategy_on_chip(
                     core = allocation[j][receiver][p]
                     chip_node_load[core[0]][core[1]] += accumulate_load[p]
                     circle_dis += calc_dis(allocation[j][receiver][p], allocation[j][receiver][(
-                        p + 1) % len(accumulate_load)])  # 难绷长难句之计算环路通信长度
+                        p + 1) % len(accumulate_load)])  # Calculate ring communication distance
 
                 cluster_internel_communication_cost[j][receiver] += math.ceil(
                     circle_dis * max(accumulate_load) / cp.B)
 
             def update_most_expensive_request(i, j, k, shape):
                 nonlocal most_expensive_request
-                sender = k % duplicate_times[i]
-                receiver = k % duplicate_times[j]
+                sender = k % replicate_times[i]
+                receiver = k % replicate_times[j]
                 channelcnt = shape[1]
                 for icoreid, icore in enumerate(allocation[i][sender]):
                     use_channel = min(
                         channelcnt, cp.channels_on_a_core())
-                    # 挑一个发，然后内部传
+                    # choose a receiver and internally transmit
                     jcoreid = icoreid % len(allocation[j][receiver])
                     jcore = allocation[j][receiver][jcoreid]
                     most_expensive_request = max(
@@ -317,48 +278,46 @@ def calc_best_strategy_on_chip(
 
             for i in range(nodecnt):
                 for j in range(nodecnt):
-                    if (nodes_re_id[i], nodes_re_id[j]
-                            ) not in re_id_graph_edgeset:
+                    if (nodes_reassigned_id[i], nodes_reassigned_id[j]
+                            ) not in reassigned_id_graph_edgeset:
                         continue
-                    shape = re_id_graph_edgeset[(
-                        nodes_re_id[i], nodes_re_id[j])]
-                    # 有batch_size个batch，
-                    # 发送方权重复制了duplicate_times[i]次
-                    # 接收方权重复制了duplicate_times[j]次
-                    # 于是第k个batch(0-based)
-                    # 由发送方的第k%duplicate_times[i]个权重复制到接收方的第k%duplicate_times[j]个权重复制
+                    shape = reassigned_id_graph_edgeset[(
+                        nodes_reassigned_id[i], nodes_reassigned_id[j])]
+                    # There are batch_size batches
+                    # The sender has replicate_times[i] replicas
+                    # The receiver has replicate_times[j] replicas
+                    # The k-th batch(0-based) should be \
+                    # sent from the k%replicate_times[i]-th replica to k%replicate_times[j]-th replica
                     for k in range(cp.batch_size):
-
-                        # 如果通过global读写，不仅要考虑上述一边的发和一边的收，还要考虑global的一读一写
-                        if (nodes_re_id[i],
-                                nodes_re_id[j]) not in communicate_on_chip:
+                        if (nodes_reassigned_id[i],
+                                nodes_reassigned_id[j]) not in communicate_on_chip:
+                            # If it is not on-chip communication, use global memory
                             add_load_sender(i, k, shape)
-                            add_load_global(shape)
-                            add_load_global(shape)  # 一读一写，两遍
+                            add_load_global(shape)  # 1 time for write
+                            add_load_global(shape)  # 1 time for read
                             add_load_receiver(j, k, shape, True)
-
-                        # 如果是片上通信，要统计开销最大的
                         else:
+                            # Use on-chip communication, consider the most expensive request
                             add_load_sender(i, k, shape)
                             add_load_receiver(j, k, shape, False)
                             update_most_expensive_request(i, j, k, shape)
 
-            # 然后计算节点输入负载
+            # Calculate node input load
             for i in range(nodecnt):
-                for j in re_id_rev_graph[nodes_re_id[i]]:
-                    if in_nodes_re_id[j] == 1:
+                for j in reassigned_id_rev_graph[nodes_reassigned_id[i]]:
+                    if in_nodes_reassigned_id[j] == 1:
                         continue
-                    # j->nodes_re_id[i]
-                    shape = re_id_graph_edgeset[(j, nodes_re_id[i])]
+                    # j->nodes_reassigned_id[i]
+                    shape = reassigned_id_graph_edgeset[(j, nodes_reassigned_id[i])]
 
                     for k in range(cp.batch_size):
-                        # i是接收方，从global读
+                        # i is the receiver, reading from global memory
                         add_load_global(shape)
                         add_load_receiver(i, k, shape, True)
 
-                # 还要讨论，有可能这是第一个节点，直接从图片读数据的
-                if nodes_re_id[i] in input_data_conv_node_re_id:
-                    shape = input_data_conv_node_re_id[nodes_re_id[i]]
+                # Also consider if this is the first node in the graph, directly reading input data from global memory
+                if nodes_reassigned_id[i] in input_data_conv_node_reassigned_id:
+                    shape = input_data_conv_node_reassigned_id[nodes_reassigned_id[i]]
                     onnx_graph.input[0].name
                     # print(shape)
                     for k in range(cp.batch_size):
@@ -366,37 +325,35 @@ def calc_best_strategy_on_chip(
                         add_load_receiver(i, k, shape, True)
                         # print("read from global",i)
 
-            # 计算节点输出负载
+            # Calculate node output load
             for i in range(nodecnt):
                 flag = False
                 shape = None
-                for j in re_id_graph[nodes_re_id[i]]:
-                    if in_nodes_re_id[j] == 0:
+                for j in reassigned_id_graph[nodes_reassigned_id[i]]:
+                    if in_nodes_reassigned_id[j] == 0:
                         flag = True
-                        shape = re_id_graph_edgeset[(nodes_re_id[i], j)]
+                        shape = reassigned_id_graph_edgeset[(nodes_reassigned_id[i], j)]
                         break
 
-                # 存在某个节点要用这个节点的输入，并且不再当前这个stage里面
-                # 或者这是一个外层已经算好了必须写出去的点
-                # 说明需要把这个点写出去
-                if flag or nodes_re_id[i] in output_data_conv_node_re_id:
+                # If some node needs to use the output of this node and it's not in the current stage
+                # Or this node's output needs to be written out
+                # It indicates that this node's output needs to be written out
+                if flag or nodes_reassigned_id[i] in output_data_conv_node_reassigned_id:
                     if shape is None:
-                        shape = output_data_conv_node_re_id[nodes_re_id[i]]
+                        shape = output_data_conv_node_reassigned_id[nodes_reassigned_id[i]]
                     for k in range(cp.batch_size):
                         add_load_sender(i, k, shape)
                         add_load_global(shape)
                         # print("write to global",i)
 
-            # print(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
-            #       math.ceil(global_memory_load / cp.global_memory_bandwidth),
-            #       math.ceil(most_expensive_request / cp.B))
+            # Calculate communication time
             communication_time = max(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
                                      math.ceil(global_memory_load / cp.global_memory_bandwidth),
                                      math.ceil(most_expensive_request / cp.B))
             communication_time += max(max(_)
                                       for _ in cluster_internel_communication_cost)
             communication_time += sum([load_time_needed_list[i]
-                                      * duplicate_times[i] for i in range(nodecnt)])
+                                      * replicate_times[i] for i in range(nodecnt)])
 
             calc_time = max(calc_time_list)
 
@@ -406,17 +363,17 @@ def calc_best_strategy_on_chip(
                 calc_time = sum(calc_time_list)
             elif cp.pattern_map == 5:
                 communication_time -= sum([load_time_needed_list[i]
-                                           * duplicate_times[i] for i in range(nodecnt)])
+                                           * replicate_times[i] for i in range(nodecnt)])
                 communication_time += sum([load_time_needed_list[i] //
                                           2 for i in range(nodecnt)])
-            return calc_time_list, calc_time + communication_time
+            return calc_time_list, calc_time + communication_time  # ,
             # max(calc_time_list), \
             # communication_time, \
             # math.ceil(max([max(_) for _ in chip_node_load]) / cp.B), \
             # math.ceil(global_memory_load / cp.global_memory_bandwidth), \
             # math.ceil(most_expensive_request / cp.B), \
             # max(max(_) for _ in cluster_internel_communication_cost), \
-            # sum([load_time_needed_list[i] * duplicate_times[i] for i in
+            # sum([load_time_needed_list[i] * replicate_times[i] for i in
             # range(nodecnt)])
 
         best_time = math.inf
@@ -424,17 +381,17 @@ def calc_best_strategy_on_chip(
         # best_pack = None
 
         if cp.partition_mode in [0, 1, 3, 4, 5]:
-            # print("\ntry a new pattern:")
+            logger.debug(f"Iteration begin:")
             while True:
-                # print("new loop")
-                allocation = put_nodes_on_chip(duplicate_times)
+                logger.debug("New loop, replicate_times: {}".format(replicate_times))
+                allocation = put_nodes_on_chip(replicate_times)
                 pack = get_cost_for_an_allocation(allocation)
                 calc_time_list, cur_time = pack[0], pack[1]
                 # print(
                 #     cur_time,
-                #     node_re_id,
+                #     node_reassigned_id,
                 #     cores_needed_list,
-                #     duplicate_times,
+                #     replicate_times,
                 #     pack)
                 if cur_time < best_time:
                     best_allocation = allocation
@@ -444,39 +401,41 @@ def calc_best_strategy_on_chip(
                                      for i, v in enumerate(calc_time_list)]
                 calc_time_list_id.sort()
                 calc_time_list_id.reverse()
-                used_core_num = sum([cores_needed_list[i] * duplicate_times[i]
+                used_core_num = sum([cores_needed_list[i] * replicate_times[i]
                                      for i in range(nodecnt)])
                 j = 0
                 assert (len(calc_time_list_id) == nodecnt)
                 while j < nodecnt:
-                    if duplicate_times[calc_time_list_id[j][1]] + 1 <= cp.batch_size and used_core_num + \
+                    if replicate_times[calc_time_list_id[j][1]] + 1 <= cp.batch_size and used_core_num + \
                             cores_needed_list[calc_time_list_id[j][1]] <= cp.C:
-                        duplicate_times[calc_time_list_id[j][1]] += 1
+                        replicate_times[calc_time_list_id[j][1]] += 1
                         break
                     else:
                         j += 1
 
                 if j == nodecnt:
                     break
-            # print(cores_needed_list)
-            # print(duplicate_times)
-            # print([cores_needed_list[i] * duplicate_times[i]
-            #       for i in range(nodecnt)])
-            # print(sum([cores_needed_list[i] * duplicate_times[i]
-            #       for i in range(nodecnt)]))
-            # print(calc_time_list)
-            # print(f"best time: {best_time}")
-            # print(f"cur time: {cur_time}")
-            # print(f"calc time: {max(calc_time_list)}")
-            # print(
-            #     f"communication time: {
+            logger.debug('cores_needed_list: ' + str(cores_needed_list))
+            logger.debug('replicate_times: ' + str(replicate_times))
+            logger.debug('actual cores needed: ' + str([cores_needed_list[i] * replicate_times[i]
+                                                        for i in range(nodecnt)]))
+            logger.debug(f'cores used in total: {sum([cores_needed_list[i] * replicate_times[i]
+                                                      for i in range(nodecnt)])}')
+            logger.debug('calc_time_list: ' + str(calc_time_list))
+            logger.debug(f'best time: {best_time}')
+            logger.debug(f'max calc time: {max(calc_time_list)}')
+            logger.debug(f'sum of calc time: {sum(calc_time_list)}')
+            logger.debug('Iteration end.')
+            # logger.debug(
+            #     f'''communication time: {
             #         cur_time -
             #         max(calc_time_list) -
-            #         load_time_needed_all}")
-            # print(f"load time: {load_time_needed_all}")
+            #         load_time_needed_all}''')
+            # logger.debug(f'load time: {load_time_needed_all}')
         else:
             assert cp.partition_mode == 2
-            allocation = put_nodes_on_chip(duplicate_times)
+            logger.debug(f'Greedy mode, no replicate.')
+            allocation = put_nodes_on_chip(replicate_times)
             pack = get_cost_for_an_allocation(allocation)
             calc_time_list, cur_time = pack[0], pack[1]
             best_allocation = allocation
@@ -487,6 +446,5 @@ def calc_best_strategy_on_chip(
             best_allocation_all_patterns = best_allocation
             # best_pack_all_patterns = best_pack
 
-    # 传进来的nodes已经重新排序了，所以重新传回去
-    # , best_pack_all_patterns
-    return best_time_all_patterns, best_allocation_all_patterns, nodes_re_id, cores_needed_list, communicate_on_chip
+    # nodes_reassigned_id have already been reordered, we need to return the new order.
+    return best_time_all_patterns, best_allocation_all_patterns, nodes_reassigned_id, cores_needed_list, communicate_on_chip

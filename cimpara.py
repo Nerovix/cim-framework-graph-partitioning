@@ -150,7 +150,7 @@ for pattern_map in pattern_maps:
     for x in range(len(pattern_map)):
         for y in range(len(pattern_map[x])):
             assert pos_lists[pattern_map[x][y]
-                             ] == (-1, -1), "duplicate position r u kidding"
+                             ] == (-1, -1), "replicate position r u kidding"
             pos_lists[pattern_map[x][y]] = (x, y)
     pattern_pos_lists.append(pos_lists)
 

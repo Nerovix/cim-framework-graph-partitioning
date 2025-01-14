@@ -1,6 +1,7 @@
 import cimpara as cp
 from collections import deque
 from read_file import get_tensor_shape
+from logging_config import logger
 
 import random
 import string
@@ -11,27 +12,26 @@ def get_unique_id(length=15):
     return ''.join(random.choice(letters) for i in range(length))
 
 
-def get_instrctions_for_a_stage(
+def get_instrctions_for_a_stage(  # see process.py for more details about the parameters
         allocation,
-        nodes_re_id,
-        communicate_on_chip,  # reid为下标的dict，包含所有chip通信关系，不在这上面的要用global通信
-        re_id_graph,
-        re_id_rev_graph,
-        re_id_graph_edgeset,
-        re_id_to_node_id,
-        input_data_conv_node_re_id,
-        output_data_conv_node_re_id,
-        graph,  # 若至变量名，命名不动脑子导致的
-        # 表示原图（包含全部节点、包括非conv节点的那张依赖关系图）
+        nodes_reassigned_id,
+        communicate_on_chip,
+        reassigned_id_graph,
+        reassigned_id_rev_graph,
+        reassigned_id_graph_edgeset,
+        reassigned_id_to_node_id,
+        input_data_conv_node_reassigned_id,
+        output_data_conv_node_reassigned_id,
+        graph,  # Represents the original graph (the dependency graph containing all nodes, including non-conv nodes)
         belong_node,
-        sorted_nodes,
-        # 排序后的全部节点
+        sorted_nodes,  # All nodes in the original graph, topsorted
         onnx_graph):
 
-    in_nodes_re_id = [0] * len(graph)
-    for i in nodes_re_id:
-        in_nodes_re_id[i] = 1
+    in_nodes_reassigned_id = [0] * len(graph)
+    for i in nodes_reassigned_id:
+        in_nodes_reassigned_id[i] = 1
 
+    # Initialize instructions for each core
     instructions = dict()
     for i in range(cp.P):
         for j in range(cp.Q):
@@ -41,15 +41,19 @@ def get_instrctions_for_a_stage(
                 'instructions': []
             }
 
-    # instruction的dict初始化 + load权重的指令
+    # Add read instructions for weights
+    logger.debug('Adding read instructions for weights...')
     for i in range(len(allocation)):
         for j in range(len(allocation[i])):
             filter_shape = get_tensor_shape(
-                onnx_graph, onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].input[1])
+                onnx_graph,
+                onnx_graph.node[reassigned_id_to_node_id[nodes_reassigned_id[i]]].input[1]
+            )
             channelcnt = filter_shape[0]
             for core in allocation[i][j]:
                 instructions[f'core_{core[0]}_{core[1]}'] = {
-                    'cluster_id': onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].name,
+                    'cluster_id': onnx_graph.node[
+                        reassigned_id_to_node_id[nodes_reassigned_id[i]]].name,
                     'weight_replica_id': j,
                     'instructions': []
                 }
@@ -58,7 +62,8 @@ def get_instrctions_for_a_stage(
                     'op': 'read',
                     'attr': {
                         'tensor_type': 'weight',
-                        'shape': [use_channel, filter_shape[1], filter_shape[2], filter_shape[3]]
+                        'shape': [use_channel, filter_shape[1],
+                                  filter_shape[2], filter_shape[3]]
                     }
                 })
                 channelcnt -= use_channel
@@ -66,41 +71,42 @@ def get_instrctions_for_a_stage(
     nodes_to_allocation_id = [-1] * len(graph)
     for i in sorted_nodes:
         flag = -1
-        for j, re_id in enumerate(nodes_re_id):
-            if re_id_to_node_id[re_id] == belong_node[i]:
+        for j, reassigned_id in enumerate(nodes_reassigned_id):
+            if reassigned_id_to_node_id[reassigned_id] == belong_node[i]:
                 flag = j
         if flag != -1:
             nodes_to_allocation_id[i] = flag
 
-    nodecnt = len(nodes_re_id)
+    nodecnt = len(nodes_reassigned_id)
 
     tmp_edgeset = dict()
 
     for i in range(nodecnt):
         for j in range(nodecnt):
-            if (nodes_re_id[i], nodes_re_id[j]) in re_id_graph_edgeset:
-                tmp_edgeset[(i, j)] = re_id_graph_edgeset[(
-                    nodes_re_id[i], nodes_re_id[j])]
-    # 稍微topsort下
+            if (nodes_reassigned_id[i], nodes_reassigned_id[j]) in reassigned_id_graph_edgeset:
+                tmp_edgeset[(i, j)] = reassigned_id_graph_edgeset[(
+                    nodes_reassigned_id[i], nodes_reassigned_id[j])]
+
+    # Perform a topsort for nodes_reassigned_id first
     indeg = [0] * nodecnt
-    for a, b in tmp_edgeset:
-        indeg[b] += 1
+    for _, to in tmp_edgeset:
+        indeg[to] += 1
 
     id_topsort = []
-    q = deque([i for i in range(nodecnt) if indeg[i] == 0])
+    topsort_queue = deque([i for i in range(nodecnt) if indeg[i] == 0])
 
-    while q:
-        x = q.popleft()
-        id_topsort.append(x)
-        for y in range(nodecnt):
-            if (x, y) in tmp_edgeset:
-                indeg[y] -= 1
-                if indeg[y] == 0:
-                    q.append(y)
+    while topsort_queue:
+        cur_node = topsort_queue.popleft()
+        id_topsort.append(cur_node)
+        for next_node in range(nodecnt):
+            if (cur_node, next_node) in tmp_edgeset:
+                indeg[next_node] -= 1
+                if indeg[next_node] == 0:
+                    topsort_queue.append(next_node)
 
-    def add_instructions(icores, jcores, shape, tensor_name_prefix):
-        if jcores is None:  # 写到global
-            assert icores is not None, 'wtf global to global wtf is this'
+    def add_communication_instructions(icores, jcores, shape, tensor_name_prefix):
+        if jcores is None:  # write to global
+            assert icores is not None, 'jcores and icores cannot be None at the same time'
             channelcnt = shape[1]
             for icore in icores:
                 use_channel = min(cp.channels_on_a_core(), channelcnt)
@@ -118,7 +124,7 @@ def get_instrctions_for_a_stage(
         core_num = len(jcores)
         accumulate_load_channelcnt = [0] * core_num
 
-        if icores is not None:
+        if icores is not None:  # send and receive
             p = 0
             channelcnt = shape[1]
             for q in range(len(icores)):
@@ -146,7 +152,7 @@ def get_instrctions_for_a_stage(
 
                 p = (p + 1) % core_num
                 channelcnt -= use_channel
-        else:
+        else:  # read from global
             remainder = shape[1] % core_num
             accumulate_load_channelcnt = [0] * core_num
             for l in range(core_num):
@@ -162,7 +168,6 @@ def get_instrctions_for_a_stage(
                 })
                 accumulate_load_channelcnt[l] += use_channel
                 remainder -= min(remainder, 1)
-            # print('read from global',j)
 
         def add_send_receive(frm, to, src, tensor_name):
             instructions[f'core_{frm[0]}_{frm[1]}']['instructions'].append({
@@ -182,6 +187,7 @@ def get_instrctions_for_a_stage(
                 }
             })
 
+        # send and receive between cores in the same cluster
         if core_num % 2 == 0:
             for round in range(core_num - 1):
                 for bit in range(0, 1):
@@ -210,53 +216,55 @@ def get_instrctions_for_a_stage(
                     tensor_name = tensor_name_prefix + \
                         f'_in_cluster_part_{src}'
                     add_send_receive(frm, to, src, tensor_name)
-    # print('nodes_re_id:', nodes_re_id)
-    # print('id_topsort:', id_topsort)
-    # print()
-    for k in range(cp.batch_size):
 
-        for i_topsort_id in range(nodecnt):
+    for k in range(cp.batch_size):  # for every batch
+        for i_topsort_id in range(nodecnt):  # for every node in topological order
             i = id_topsort[i_topsort_id]
-            # 这里i已经按照拓扑序排了。现在加入指令：
-            # 先加入读入数据，再加入计算，再加入输出数据
 
-            # ----------读入----------
-            # 只考虑从global读，从其他receive放下面
-            for j in re_id_rev_graph[nodes_re_id[i]]:
-                if in_nodes_re_id[j] == 1:
+            logger.debug(f'Processing node reassigned id {i}...')
+            # Instructions for node i in topological order:
+            # First add input read/receive instructions
+            # Then add computation instructions
+            # Finally add output write/send instructions
+
+            # Input:
+            # Only consider reading from global memory, receiving from others will be handled later
+            for j in reassigned_id_rev_graph[nodes_reassigned_id[i]]:
+                if in_nodes_reassigned_id[j] == 1:
                     continue  # 不在此stage
 
-                shape = re_id_graph_edgeset[(j, nodes_re_id[i])]
-                add_instructions(None,
-                                 allocation[i][k % len(allocation[i])],
-                                 shape,
-                                 get_unique_id())
+                shape = reassigned_id_graph_edgeset[(j, nodes_reassigned_id[i])]
+                add_communication_instructions(None,
+                                               allocation[i][k % len(allocation[i])],
+                                               shape,
+                                               get_unique_id())
 
-            # 还要讨论，有可能这是第一个节点
-            if nodes_re_id[i] in input_data_conv_node_re_id:
-                shape = input_data_conv_node_re_id[nodes_re_id[i]]
-                add_instructions(None,
-                                 allocation[i][k % len(allocation[i])],
-                                 shape,
-                                 get_unique_id())
+            # Also check if this is the first node
+            if nodes_reassigned_id[i] in input_data_conv_node_reassigned_id:
+                shape = input_data_conv_node_reassigned_id[nodes_reassigned_id[i]]
+                add_communication_instructions(None,
+                                               allocation[i][k % len(allocation[i])],
+                                               shape,
+                                               get_unique_id())
 
-            # ----------计算----------
+            # Computation：
+            # Get nodes belonging to this conv node
             in_cluster_nodes = [
-                _ for _ in sorted_nodes if belong_node[_] == re_id_to_node_id[nodes_re_id[i]]]
+                _ for _ in sorted_nodes if belong_node[_] == reassigned_id_to_node_id[nodes_reassigned_id[i]]]
             output_shape = get_tensor_shape(
-                # 假定挂在这个conv上的节点的其他操作的**输入**大小都跟这个conv**输出**的大小一样
-                # 这个假定其实不是很科学，但是考虑到相邻的layer的激活值尺寸差别不大，就这么处理了
-                # 后面可能改一改其他节点挂在conv上的方式
+                # Assume other ops attached to this conv node have same input size as the output size of the conv node
+                # This assumption is not 100% accurate, but considering activation sizes don't vary much between adjacent layers,
+                # We'll handle it this way for now
+                # May change how other nodes attach to conv later
                 onnx_graph,
-                onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].output[0])
+                onnx_graph.node[reassigned_id_to_node_id[nodes_reassigned_id[i]]].output[0])
 
             weight_shape = get_tensor_shape(
-                onnx_graph, 
-                onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].input[1])
+                onnx_graph,
+                onnx_graph.node[reassigned_id_to_node_id[nodes_reassigned_id[i]]].input[1])
             input_shape = get_tensor_shape(
-                onnx_graph, 
-                onnx_graph.node[re_id_to_node_id[nodes_re_id[i]]].input[0])
-            
+                onnx_graph,
+                onnx_graph.node[reassigned_id_to_node_id[nodes_reassigned_id[i]]].input[0])
 
             output_shape[0] = 1
             runner = k % len(allocation[i])
@@ -310,7 +318,7 @@ def get_instrctions_for_a_stage(
                                     'strides': list(strides)
                                 }
                             })
-                    elif op_type == 'Add' and onnx_graph.node[nodeid].input[1].find('zero_point')==-1:
+                    elif op_type == 'Add' and onnx_graph.node[nodeid].input[1].find('zero_point') == -1:
                         instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                             'op': 'add',
                             'attr': {
@@ -322,48 +330,51 @@ def get_instrctions_for_a_stage(
                         pass
                 assert channelcnt == 0
 
-            # ----------输出----------
-            # 向同stage其他节点输出、同stage其他节点的读入
+            # Output：
+            # Output to other nodes in same stage and handle their input
+            # Since we did a topsort, we can ensure that the output nodes of this node haven't been processed yet
+            # So we can directly add receive instructions for the output nodes of node i
 
             for j in range(nodecnt):
-                if (nodes_re_id[i], nodes_re_id[j]
-                    ) not in re_id_graph_edgeset:
+                if (nodes_reassigned_id[i], nodes_reassigned_id[j]
+                        ) not in reassigned_id_graph_edgeset:
                     continue
-                shape = re_id_graph_edgeset[(
-                    nodes_re_id[i], nodes_re_id[j])]
+                shape = reassigned_id_graph_edgeset[(
+                    nodes_reassigned_id[i], nodes_reassigned_id[j])]
 
-                if (nodes_re_id[i],
-                        nodes_re_id[j]) in communicate_on_chip:
-                    add_instructions(allocation[i][k % len(allocation[i])],
-                                     allocation[j][k % len(allocation[j])],
-                                     shape,
-                                     get_unique_id())
+                if (nodes_reassigned_id[i],
+                        nodes_reassigned_id[j]) in communicate_on_chip:
+                    add_communication_instructions(allocation[i][k % len(allocation[i])],
+                                                   allocation[j][k % len(allocation[j])],
+                                                   shape,
+                                                   get_unique_id())
                 else:
                     unique_id = get_unique_id()
-                    add_instructions(allocation[i][k % len(allocation[i])],
-                                     None,
-                                     shape,
-                                     unique_id)
-                    add_instructions(None,
-                                     allocation[j][k % len(allocation[j])],
-                                     shape,
-                                     unique_id)
+                    add_communication_instructions(allocation[i][k % len(allocation[i])],
+                                                   None,
+                                                   shape,
+                                                   unique_id)
+                    add_communication_instructions(None,
+                                                   allocation[j][k % len(allocation[j])],
+                                                   shape,
+                                                   unique_id)
 
-            # 向global的输出
+            # Output to global memory
             flag = False
             shape = None
-            for j in re_id_graph[nodes_re_id[i]]:
-                if in_nodes_re_id[j] == 0:
+            for j in reassigned_id_graph[nodes_reassigned_id[i]]:
+                if in_nodes_reassigned_id[j] == 0:
                     flag = True
-                    shape = re_id_graph_edgeset[(nodes_re_id[i], j)]
+                    shape = reassigned_id_graph_edgeset[(nodes_reassigned_id[i], j)]
                     break
-            # 存在某个节点要用这个节点的输入，并且不再当前这个stage里面，说明需要把这个点写出去
-            if flag or nodes_re_id[i] in output_data_conv_node_re_id:
+            # If some node needs this node's output but is not in current stage,
+            # We need to write this node's output to global memory
+            if flag or nodes_reassigned_id[i] in output_data_conv_node_reassigned_id:
                 if shape is None:
-                    shape = output_data_conv_node_re_id[nodes_re_id[i]]
-                add_instructions(allocation[i][k % len(allocation[i])],
-                                 None,
-                                 shape,
-                                 get_unique_id())
+                    shape = output_data_conv_node_reassigned_id[nodes_reassigned_id[i]]
+                add_communication_instructions(allocation[i][k % len(allocation[i])],
+                                               None,
+                                               shape,
+                                               get_unique_id())
 
     return instructions

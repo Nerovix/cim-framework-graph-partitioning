@@ -1,24 +1,20 @@
-# 忽略编译生成的文件
 *.pyc
 __pycache__/
 
-# 忽略虚拟环境目录
 venv/
 .env/
 
-# 忽略日志文件和临时文件
 *.log
 *.tmp
 
-# 忽略 IDE 和编辑器生成的文件
 .vscode/
 .idea/
 *.swp
 *.swo
 *.swn
 
-# 太大
-model_files/
+# too big
+model_files/vgg*
+model_files/resnet*
 instruction_files/
-instruction_files_extra/
 ./instructions.json
