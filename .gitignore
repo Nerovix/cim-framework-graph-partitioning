@@ -13,6 +13,8 @@ venv/
 *.swo
 *.swn
 
+.DS_Store
+
 # too big
 model_files/vgg*
 model_files/resnet*
