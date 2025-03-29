@@ -91,7 +91,7 @@ def process(onnx_graph):
     prefixes_bitmask_reassigned_id = find_all_prefixes(reassigned_id_graph)
     stages = []
 
-    if cp.partition_mode in [0, 3, 4, 5]:
+    if cp.partition_mode in [0, 3, 4, 5, 6]:
         # DP for strategy
         dp_stages = [math.inf] * len(prefixes_bitmask_reassigned_id)
         dp_stages_from = [-1] * len(dp_stages)

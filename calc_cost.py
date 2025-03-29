@@ -366,6 +366,9 @@ def calc_best_strategy_on_chip(
                                            * replicate_times[i] for i in range(nodecnt)])
                 communication_time += sum([load_time_needed_list[i] //
                                           2 for i in range(nodecnt)])
+            elif cp.partition_mode == 6:
+                calc_time = sum(calc_time_list) + max(calc_time_list) * cp.batch_size
+                communication_time = communication_time * cp.batch_size
             return calc_time_list, calc_time + communication_time  # ,
             # max(calc_time_list), \
             # communication_time, \
@@ -380,7 +383,7 @@ def calc_best_strategy_on_chip(
         best_allocation = None
         # best_pack = None
 
-        if cp.partition_mode in [0, 1, 3, 4, 5]:
+        if cp.partition_mode in [0, 1, 3, 4, 5, 6]:
             logger.debug(f"Iteration begin:")
             while True:
                 logger.debug("New loop, replicate_times: {}".format(replicate_times))
