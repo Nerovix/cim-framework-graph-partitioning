@@ -368,7 +368,7 @@ def calc_best_strategy_on_chip(
                                           2 for i in range(nodecnt)])
             elif cp.partition_mode == 6:
                 calc_time = sum(calc_time_list) + max(calc_time_list) * cp.batch_size
-                communication_time = communication_time * cp.batch_size
+                communication_time = communication_time 
             return calc_time_list, calc_time + communication_time  # ,
             # max(calc_time_list), \
             # communication_time, \

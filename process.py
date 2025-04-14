@@ -69,14 +69,14 @@ def process(onnx_graph):
                 assert len(shape) == 4, \
                     'shape should be [N * C * H * W], but dimension of the tensor is not 4'
 
-            elif i_bel != j_bel and is_conv_node[j_bel] == 0: 
-                # j_bel is not a conv node, so it is a Gemm node. 
+            elif i_bel != j_bel and is_conv_node[j_bel] == 0:
+                # j_bel is not a conv node, so it is a Gemm node.
                 # Gemm nodes always appears last in the DAG, so we won't discuss them at the moment. Just record that i_bel needs to store its result in global memory.
                 output_data_conv_node_reassigned_id[i_bel_reassigned_id] = get_tensor_shape(
                     onnx_graph,
                     onnx_graph.node[reassigned_id_to_node_id[i_bel_reassigned_id]].output[0]
                 )
-                
+
         # It's also possible that i_bel is the first node in the graph, it needs to read original input data from global memory.
         if onnx_graph.input[0].name in onnx_graph.node[i].input:
             input_data_conv_node_reassigned_id[i_bel_reassigned_id] = get_tensor_shape(
@@ -96,7 +96,7 @@ def process(onnx_graph):
         dp_stages = [math.inf] * len(prefixes_bitmask_reassigned_id)
         dp_stages_from = [-1] * len(dp_stages)
         dp_stages_alloc_info = [0] * len(dp_stages)
-        
+
         logger.info("DP started")
 
         # prefixes list is sorted, just enumerate by index
@@ -151,9 +151,9 @@ def process(onnx_graph):
     else:
         # Naive greedy: do a topsort and try to put as many nodes as possible into one stage until cores are used up
         # Should be worse than DP
-        
+
         logger.info("Greedy started")
-        
+
         sorted_nodes_reassigned_id = topsort(
             [[reassigned_id_rev_graph[i], reassigned_id_graph[i]] for i in range(len(reassigned_id_graph))])
         cur_prefix_idx = 0
@@ -188,7 +188,7 @@ def process(onnx_graph):
 
     instructions = {f'core_{i}_{j}': {'stages': {}} for i in range(cp.P) for j in range(cp.Q)}
     sorted_nodes = topsort(graph)
-    
+
     logger.info(f'Generating instructions...')
     for stageid, stage in enumerate(stages):
         alloc, nodes_reassigned_id, cores_needed_list, communicate_on_chip_edgeset = stage

@@ -1,36 +1,53 @@
+import os
+import sys
+import argparse
 import main
 import cimpara
-import os
 
 output_dir = './instruction_files'
 os.makedirs(output_dir, exist_ok=True)
 
-for model_name in ['mobilenet', 'resnet18', 'vgg19', 'efficientnet']:
-    for T in [4, 8, 12, 16]:
-        for B in [8, 16]:
-            for partition_mode in [6]:
-                cimpara.onnx_file_path = f'./model_files/{model_name}-simplified.onnx'
-                if os.path.exists(cimpara.onnx_file_path) == False:
-                    continue
-                cimpara.T = T
-                cimpara.B = B
-                cimpara.partition_mode = partition_mode
-                strategy = 'dp'
-                if partition_mode == 1:
-                    strategy = 'baseline1'
-                elif partition_mode == 2:
-                    strategy = 'baseline2'
-                elif partition_mode == 3:
-                    strategy = '2x_communication_time'
-                elif partition_mode == 4:
-                    strategy = 'sum_calc_time'
-                elif partition_mode == 5:
-                    strategy = '0.5x_load_time'
-                elif partition_mode == 6:
-                    strategy = 'pipelined_calculate_time'
+parser = argparse.ArgumentParser()
+parser.add_argument('-T', type=int, default=4, help="T in {4, 8, 12, 16}")
+parser.add_argument('-B', type=int, default=8, help="B in {8, 16}")
+parser.add_argument('--model-name', type=str, required=True, help="model-name in {mobilenet, resnet18, vgg19, efficientnet}")
+parser.add_argument('--strategy', type=str, default="dp", help="strategy in {dp, baseline1, baseline2, 2x_communication_time, sum_calc_time, 0.5x_load_time, pipelined_calculate_time}")
+args = parser.parse_args()
 
-                cimpara.instructions_file_path = f'{output_dir}/instructions_{
-                    model_name}_{strategy}_T{T}_B{B}.json'
-                main.main()
+if args.T not in [4, 8, 12, 16]:
+    sys.exit("T should be in {4, 8, 12, 16}")
+if args.B not in [8, 16]:
+    sys.exit("B should be in {8, 16}")
+if args.model_name not in ['mobilenet', 'resnet18', 'vgg19', 'efficientnet']:
+    sys.exit("model-name should be in {mobilenet, resnet18, vgg19, efficientnet}")
+allowed_strategies = ['dp', 'baseline1', 'baseline2', '2x_communication_time', 'sum_calc_time', '0.5x_load_time', 'pipelined_calculate_time']
+if args.strategy not in allowed_strategies:
+    sys.exit("strategy is illegal")
 
-# os.system('zip instruction_files.zip instruction_files_ -r')
+if args.strategy == 'baseline1':
+    partition_mode = 1
+elif args.strategy == 'baseline2':
+    partition_mode = 2
+elif args.strategy == '2x_communication_time':
+    partition_mode = 3
+elif args.strategy == 'sum_calc_time':
+    partition_mode = 4
+elif args.strategy == '0.5x_load_time':
+    partition_mode = 5
+elif args.strategy == 'pipelined_calculate_time':
+    partition_mode = 6
+elif args.strategy == 'dp':
+    partition_mode = 0
+else:
+    partition_mode = 0
+
+cimpara.onnx_file_path = f'./model_files/{args.model_name}-simplified.onnx'
+if not os.path.exists(cimpara.onnx_file_path):
+    sys.exit(f"onnx file doesn't exist: {cimpara.onnx_file_path}")
+
+cimpara.T = args.T
+cimpara.B = args.B
+cimpara.partition_mode = partition_mode
+cimpara.instructions_file_path = f'{output_dir}/instructions_{args.model_name}_{args.strategy}_T{args.T}_B{args.B}.json'
+
+main.main()

@@ -16,14 +16,8 @@ P = 8  # /12
 Q = 8  # /12
 B = 8  # /16
 global_memory_bandwidth = 64
-# --------------------------------------------
 
-
-# 0: dp
-# 1: baseline1，先尽可能往上放，然后再复制
-# 2: baseline2，不复制，一直往上放，直到放不动。
-# >3：更多奇奇怪怪
-partition_mode = 3
+partition_mode = 0
 
 
 batch_size = 8
@@ -31,7 +25,6 @@ batch_size = 8
 weight_width = 8  # width of weights
 feature_width = 8  # width of activation values
 
-# 每个核能计算的channel_out数量：每个macro的计算能力*每个macro group包含T个macro
 def channels_on_a_core():
     return n * W // weight_width * T
 
@@ -154,4 +147,3 @@ for pattern_map in pattern_maps:
             pos_lists[pattern_map[x][y]] = (x, y)
     pattern_pos_lists.append(pos_lists)
 
-# print(pattern_pos_lists[1])
