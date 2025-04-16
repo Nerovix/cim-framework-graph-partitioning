@@ -145,9 +145,7 @@ def calc_best_strategy_on_chip(
     if sum(cores_needed_list) > cp.C:
         # if there is only one core and there is only one node,
         # do the calculation in multiple times
-        logger.info('here1' + str(cp.C) + " " + str(nodecnt))
         if cp.C == 1 and nodecnt == 1:
-            logger.info('here2')
             flag11 = True
             mul11 = cores_needed_list[0]
             cores_needed_list[0] = 1
@@ -155,7 +153,6 @@ def calc_best_strategy_on_chip(
             logger.debug("Cannot be placed on the chip, no enough cores.")
             return math.inf, None, None, None, None
 
-    logger.info('here3')
     logger.debug('nodes_reassigned_id:' + str(nodes_reassigned_id))
     logger.debug('cores_needed_list:' + str(cores_needed_list))
     logger.debug('time_needed_list:' + str(time_needed_list))
