@@ -11,7 +11,7 @@ os.makedirs(output_dir, exist_ok=True)
 parser = argparse.ArgumentParser()
 parser.add_argument('-T', type=int, default=4, help="T in {4, 8, 12, 16}")
 parser.add_argument('-B', type=int, default=8, help="B in {1, 8, 16}")
-parser.add_argument('-C', type=int, default=64, help="P in {1, 64, 144}")
+parser.add_argument('-C', type=int, default=64, help="C in {1, 64, 144}")
 parser.add_argument('--model-path', type=str, required=True, help="onnx model file path, e.g. ./model_files/resnet18.onnx")
 parser.add_argument('--strategy', type=str, default="dp", help="strategy in {dp, baseline1, baseline2, 2x_communication_time, sum_calc_time, 0.5x_load_time, pipelined_calculate_time}")
 

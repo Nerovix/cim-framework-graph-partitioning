@@ -108,17 +108,17 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
         if jcores is None:  # write to global
             assert icores is not None, 'jcores and icores cannot be None at the same time'
             channelcnt = shape[1]
-            for icore in icores:
-                use_channel = min(cp.channels_on_a_core(), channelcnt)
-                instructions[f'core_{icore[0]}_{icore[1]}']['instructions'].append({
-                    'op': 'write',
-                    'attr': {
-                        'tensor_type': 'feature',
-                        'shape': [1, use_channel, shape[2], shape[3]]
-                    }
-                })
-                channelcnt -= use_channel
-            assert channelcnt == 0
+            while channelcnt == 0:
+                for icore in icores:
+                    use_channel = min(cp.channels_on_a_core(), channelcnt)
+                    instructions[f'core_{icore[0]}_{icore[1]}']['instructions'].append({
+                        'op': 'write',
+                        'attr': {
+                            'tensor_type': 'feature',
+                            'shape': [1, use_channel, shape[2], shape[3]]
+                        }
+                    })
+                    channelcnt -= use_channel
             return
 
         core_num = len(jcores)
@@ -273,62 +273,63 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                 channelcnt = 0
                 op_type = onnx_graph.node[nodeid].op_type
                 channelcnt = weight_shape[0]
-                for coreid in range(core_num):
-                    use_channel = min(channelcnt, cp.channels_on_a_core())
-                    assert use_channel != 0
-                    core = allocation[i][runner][coreid]
-                    channelcnt -= use_channel
-                    if op_type == 'Conv':
-                        group = [
-                            attr.i for attr in onnx_graph.node[nodeid].attribute if attr.name == 'group'][0]
-                        padding = [
-                            attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'pads'][0]
-                        strides = [
-                            attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'strides'][0]
-                        if group == 1:
-                            X_shape = [
-                                1, input_shape[1], input_shape[2], input_shape[3]]
-                            W_shape = get_tensor_shape(
-                                onnx_graph, onnx_graph.node[nodeid].input[1])
-                            assert use_channel != 0
-                            W_shape[0] = use_channel
+                while channelcnt != 0:
+                    for coreid in range(core_num):
+                        use_channel = min(channelcnt, cp.channels_on_a_core())
+                        assert use_channel != 0
+                        core = allocation[i][runner][coreid]
+                        channelcnt -= use_channel
+                        if op_type == 'Conv':
+                            group = [
+                                attr.i for attr in onnx_graph.node[nodeid].attribute if attr.name == 'group'][0]
+                            padding = [
+                                attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'pads'][0]
+                            strides = [
+                                attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'strides'][0]
+                            if group == 1:
+                                X_shape = [
+                                    1, input_shape[1], input_shape[2], input_shape[3]]
+                                W_shape = get_tensor_shape(
+                                    onnx_graph, onnx_graph.node[nodeid].input[1])
+                                assert use_channel != 0
+                                W_shape[0] = use_channel
+                                instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
+                                    'op': 'conv',
+                                    'attr': {
+                                        'X_shape': X_shape,
+                                        'W_shape': W_shape,
+                                        'padding': list(padding),
+                                        'strides': list(strides)
+                                    }
+                                })
+                            else:  # depthwise conv
+                                X_shape = [
+                                    1, input_shape[1], input_shape[2], input_shape[3]]
+                                W_shape = get_tensor_shape(
+                                    onnx_graph, onnx_graph.node[nodeid].input[1])
+                                assert W_shape[1] == 1
+                                W_shape[0] = use_channel
+                                instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
+                                    'op': 'depthwise_conv',
+                                    'attr': {
+                                        'group': group,
+                                        'X_shape': X_shape,
+                                        'W_shape': W_shape,
+                                        'padding': list(padding),
+                                        'strides': list(strides)
+                                    }
+                                })
+                        elif op_type == 'Add' and onnx_graph.node[nodeid].input[1].find('zero_point') == -1:
                             instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
-                                'op': 'conv',
+                                'op': 'add',
                                 'attr': {
-                                    'X_shape': X_shape,
-                                    'W_shape': W_shape,
-                                    'padding': list(padding),
-                                    'strides': list(strides)
+                                    'shape': [1, use_channel, output_shape[2], output_shape[3]]
                                 }
                             })
-                        else:  # depthwise conv
-                            X_shape = [
-                                1, input_shape[1], input_shape[2], input_shape[3]]
-                            W_shape = get_tensor_shape(
-                                onnx_graph, onnx_graph.node[nodeid].input[1])
-                            assert W_shape[1] == 1
-                            W_shape[0] = use_channel
-                            instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
-                                'op': 'depthwise_conv',
-                                'attr': {
-                                    'group': group,
-                                    'X_shape': X_shape,
-                                    'W_shape': W_shape,
-                                    'padding': list(padding),
-                                    'strides': list(strides)
-                                }
-                            })
-                    elif op_type == 'Add' and onnx_graph.node[nodeid].input[1].find('zero_point') == -1:
-                        instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
-                            'op': 'add',
-                            'attr': {
-                                'shape': [1, use_channel, output_shape[2], output_shape[3]]
-                            }
-                        })
-                    else:
-                        # unimportant operators, do nothing
-                        pass
-                assert channelcnt == 0
+                        else:
+                            # unimportant operators, do nothing
+                            pass
+                
 
             # Output：
             # Output to other nodes in same stage and handle their input

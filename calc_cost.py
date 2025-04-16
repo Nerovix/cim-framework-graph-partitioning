@@ -139,10 +139,23 @@ def calc_best_strategy_on_chip(
         load_time_needed_list.append(load_time_needed)
 
     # Special case: cannot be placed on the chip
-    if sum(cores_needed_list) > cp.C:
-        logger.debug("Cannot be placed on the chip, no enough cores.")
-        return math.inf, None, None, None, None
+    flag11 = False
+    mul11 = 1
 
+    if sum(cores_needed_list) > cp.C:
+        # if there is only one core and there is only one node,
+        # do the calculation in multiple times
+        logger.info('here1' + str(cp.C) + " " + str(nodecnt))
+        if cp.C == 1 and nodecnt == 1:
+            logger.info('here2')
+            flag11 = True
+            mul11 = cores_needed_list[0]
+            cores_needed_list[0] = 1
+        else:
+            logger.debug("Cannot be placed on the chip, no enough cores.")
+            return math.inf, None, None, None, None
+
+    logger.info('here3')
     logger.debug('nodes_reassigned_id:' + str(nodes_reassigned_id))
     logger.debug('cores_needed_list:' + str(cores_needed_list))
     logger.debug('time_needed_list:' + str(time_needed_list))
@@ -186,6 +199,8 @@ def calc_best_strategy_on_chip(
             for i in range(nodecnt):
                 calc_time_list[i] = math.ceil(
                     cp.batch_size * time_needed_list[i] / len(allocation[i]))
+                if flag11:
+                    calc_time_list[i] = calc_time_list[i] * mul11
 
             most_expensive_request = 0
             chip_node_load = [[0] * cp.Q for _ in range(cp.P)]
@@ -194,7 +209,6 @@ def calc_best_strategy_on_chip(
                 [0] * len(allocation[i]) for i in range(len(allocation))]
 
             # Calculate communication load between nodes
-
             def add_load_sender(i, k, shape):
                 nonlocal chip_node_load
                 sender = k % replicate_times[i]
@@ -206,7 +220,22 @@ def calc_best_strategy_on_chip(
                     chip_node_load[core[0]][core[1]] += use_channel * \
                         shape[2] * shape[3] * cp.feature_width // 8  # bit to Byte
                     channelcnt -= use_channel
-
+                if flag11:
+                    assert len(allocation[i][sender]) == 1
+                    core = allocation[i][sender][0]
+                    for _ in range(mul11):
+                        use_channel = min(
+                            channelcnt, cp.channels_on_a_core())
+                        chip_node_load[core[0]][core[1]] += use_channel * \
+                            shape[2] * shape[3] * cp.feature_width // 8  # bit to Byte
+                        channelcnt -= use_channel
+                else:
+                    for core in allocation[i][sender]:
+                        use_channel = min(
+                            channelcnt, cp.channels_on_a_core())
+                        chip_node_load[core[0]][core[1]] += use_channel * \
+                            shape[2] * shape[3] * cp.feature_width // 8  # bit to Byte
+                        channelcnt -= use_channel
                 assert channelcnt == 0
 
             def add_load_receiver(j, k, shape, is_from_global):
@@ -279,8 +308,10 @@ def calc_best_strategy_on_chip(
             for i in range(nodecnt):
                 for j in range(nodecnt):
                     if (nodes_reassigned_id[i], nodes_reassigned_id[j]
-                            ) not in reassigned_id_graph_edgeset:
+                        ) not in reassigned_id_graph_edgeset:
                         continue
+                    assert not flag11, "1-core-1-node-multiple-times situation but in stage \
+                                        communication occurred, something is wrong..."
                     shape = reassigned_id_graph_edgeset[(
                         nodes_reassigned_id[i], nodes_reassigned_id[j])]
                     # There are batch_size batches
@@ -308,6 +339,7 @@ def calc_best_strategy_on_chip(
                     if in_nodes_reassigned_id[j] == 1:
                         continue
                     # j->nodes_reassigned_id[i]
+
                     shape = reassigned_id_graph_edgeset[(j, nodes_reassigned_id[i])]
 
                     for k in range(cp.batch_size):
@@ -368,7 +400,7 @@ def calc_best_strategy_on_chip(
                                           2 for i in range(nodecnt)])
             elif cp.partition_mode == 6:
                 calc_time = sum(calc_time_list) + max(calc_time_list) * cp.batch_size
-                communication_time = communication_time 
+                communication_time = communication_time
             return calc_time_list, calc_time + communication_time  # ,
             # max(calc_time_list), \
             # communication_time, \
