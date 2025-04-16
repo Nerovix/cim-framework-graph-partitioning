@@ -361,7 +361,7 @@ def calc_best_strategy_on_chip(
                 communication_time *= 2
             elif cp.partition_mode == 4:
                 calc_time = sum(calc_time_list)
-            elif cp.pattern_map == 5:
+            elif cp.partition_mode == 5:
                 communication_time -= sum([load_time_needed_list[i]
                                            * replicate_times[i] for i in range(nodecnt)])
                 communication_time += sum([load_time_needed_list[i] //
