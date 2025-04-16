@@ -422,8 +422,11 @@ def calc_best_strategy_on_chip(
             logger.debug('replicate_times: ' + str(replicate_times))
             logger.debug('actual cores needed: ' + str([cores_needed_list[i] * replicate_times[i]
                                                         for i in range(nodecnt)]))
-            logger.debug(f'cores used in total: {sum([cores_needed_list[i] * replicate_times[i]
-                                                      for i in range(nodecnt)])}')
+            total_cores_used = sum([
+                cores_needed_list[i] * replicate_times[i]
+                for i in range(nodecnt)
+            ])
+            logger.debug(f'cores used in total: {total_cores_used}')
             logger.debug('calc_time_list: ' + str(calc_time_list))
             logger.debug(f'best time: {best_time}')
             logger.debug(f'max calc time: {max(calc_time_list)}')

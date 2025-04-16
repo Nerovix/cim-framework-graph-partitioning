@@ -28,6 +28,8 @@ feature_width = 8  # width of activation values
 def channels_on_a_core():
     return n * W // weight_width * T
 
+pattern_maps_1 = [[[0]]]
+
 pattern_maps_64 = [
     [   # S-snake
         [0, 1, 2, 3, 4, 5, 6, 7],
@@ -132,18 +134,36 @@ pattern_maps_144 = [
 ]
 
 pattern_maps = []
-if C == 64:
-    pattern_maps = pattern_maps_64
-elif C == 144:
-    pattern_maps = pattern_maps_144
+# if C == 1:
+#     pattern_maps = pattern_maps_1
+# elif C == 64:
+#     pattern_maps = pattern_maps_64
+# elif C == 144:
+#     pattern_maps = pattern_maps_144
 
 pattern_pos_lists = []
-for pattern_map in pattern_maps:
-    pos_lists = [(-1, -1)] * C
-    for x in range(len(pattern_map)):
-        for y in range(len(pattern_map[x])):
-            assert pos_lists[pattern_map[x][y]
-                             ] == (-1, -1), "replicate position r u kidding"
-            pos_lists[pattern_map[x][y]] = (x, y)
-    pattern_pos_lists.append(pos_lists)
+# for pattern_map in pattern_maps:
+#     pos_lists = [(-1, -1)] * C
+#     for x in range(len(pattern_map)):
+#         for y in range(len(pattern_map[x])):
+#             assert pos_lists[pattern_map[x][y]
+#                              ] == (-1, -1), "replicate position r u kidding"
+#             pos_lists[pattern_map[x][y]] = (x, y)
+#     pattern_pos_lists.append(pos_lists)
 
+def update_pos_lists():
+    if C == 1:
+        pattern_maps = pattern_maps_1
+    elif C == 64:
+        pattern_maps = pattern_maps_64
+    elif C == 144:
+        pattern_maps = pattern_maps_144
+
+    for pattern_map in pattern_maps:
+        pos_lists = [(-1, -1)] * C
+        for x in range(len(pattern_map)):
+            for y in range(len(pattern_map[x])):
+                assert pos_lists[pattern_map[x][y]
+                                 ] == (-1, -1), "replicate position r u kidding"
+                pos_lists[pattern_map[x][y]] = (x, y)
+        pattern_pos_lists.append(pos_lists)
