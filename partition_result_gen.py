@@ -108,7 +108,7 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
         if jcores is None:  # write to global
             assert icores is not None, 'jcores and icores cannot be None at the same time'
             channelcnt = shape[1]
-            while channelcnt == 0:
+            while channelcnt != 0:
                 for icore in icores:
                     use_channel = min(cp.channels_on_a_core(), channelcnt)
                     instructions[f'core_{icore[0]}_{icore[1]}']['instructions'].append({
@@ -119,6 +119,10 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                         }
                     })
                     channelcnt -= use_channel
+                if cp.C == 1:
+                    assert nodecnt == 1, "something is wrong"
+                else:
+                    assert channelcnt == 0, "something is wrong"
             return
 
         core_num = len(jcores)
@@ -329,7 +333,6 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                         else:
                             # unimportant operators, do nothing
                             pass
-                
 
             # Output：
             # Output to other nodes in same stage and handle their input
@@ -338,7 +341,7 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
 
             for j in range(nodecnt):
                 if (nodes_reassigned_id[i], nodes_reassigned_id[j]
-                        ) not in reassigned_id_graph_edgeset:
+                    ) not in reassigned_id_graph_edgeset:
                     continue
                 shape = reassigned_id_graph_edgeset[(
                     nodes_reassigned_id[i], nodes_reassigned_id[j])]

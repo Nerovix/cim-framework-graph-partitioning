@@ -21,3 +21,4 @@ model_files/resnet*
 instruction_files/
 ./instructions.json
 simplified_model_files/
+*.json

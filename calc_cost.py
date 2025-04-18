@@ -211,12 +211,7 @@ def calc_best_strategy_on_chip(
                 sender = k % replicate_times[i]
                 channelcnt = shape[1]
                 assert len(allocation[i][sender]) == cores_needed_list[i]
-                for core in allocation[i][sender]:
-                    use_channel = min(
-                        channelcnt, cp.channels_on_a_core())
-                    chip_node_load[core[0]][core[1]] += use_channel * \
-                        shape[2] * shape[3] * cp.feature_width // 8  # bit to Byte
-                    channelcnt -= use_channel
+                
                 if flag11:
                     assert len(allocation[i][sender]) == 1
                     core = allocation[i][sender][0]
