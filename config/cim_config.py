@@ -52,6 +52,6 @@ def update_pos_lists():
         pos_lists = [(-1, -1)] * num
         for x in range(len(pattern_map)):
             for y in range(len(pattern_map[x])):
-                assert pos_lists[pattern_map[x][y]] == (-1, -1), "replicate position r u kidding"
+                assert pos_lists[pattern_map[x][y]] == (-1, -1), "Duplicated replicate position detected"
                 pos_lists[pattern_map[x][y]] = (x, y)
         pattern_pos_lists.append(pos_lists)
