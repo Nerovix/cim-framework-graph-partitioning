@@ -192,6 +192,12 @@ def drunk_snake(side: int) -> Grid:
 
 # convenience: generate all four patterns like earlier
 def make_pattern_maps(n_cores: int, pm_path: str) -> Dict[str, Grid]:
+    if n_cores == 1:
+        with open(pm_path, "w") as f:
+            f.write(f"# auto-generated pattern maps:\n")
+            f.write(f"pattern_maps_{n_cores} = [[[0]]]\n")
+        return {"s_snake": [[0]]}
+    
     side = int(math.isqrt(n_cores))
     if side * side != n_cores:
         raise ValueError(f"{n_cores} is not a perfect square")
@@ -204,7 +210,7 @@ def make_pattern_maps(n_cores: int, pm_path: str) -> Dict[str, Grid]:
     globals()[f"pattern_maps_{n_cores}"] = [patt0, patt1, patt2, patt3]
     # write them to a file
     with open(pm_path, "w") as f:
-        f.write(f"# auto-generated — commit to repo so it needn't be rebuilt at runtime\n")
+        f.write(f"# auto-generated pattern maps:\n")
         f.write(f"pattern_maps_{n_cores} = \\\n")
         f.write(f"{textwrap.indent(pformat([patt0, patt1, patt2, patt3], width=100, compact=False), '    ')}\n")
 
