@@ -1,4 +1,4 @@
-# cim-framework-graph-partitioning
+# CG-level Optimization
 
-nixianbieji
+This repo is currently under development. 
 

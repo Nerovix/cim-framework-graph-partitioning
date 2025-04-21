@@ -1,9 +1,9 @@
 import json
-from read_file import load_onnx_model
-from read_file import print_graph_nodes
-from process import process
-from logging_config import logger
-import cimpara as cp
+from preprocess.read_file import load_onnx_model
+from preprocess.read_file import print_graph_nodes
+from optimization.cg_mapping import cg_mapping
+from config.logger_config import logger
+import config.cim_config as c_conf
 import sys
 sys.setrecursionlimit(100000)  # for dfs
 
@@ -11,18 +11,18 @@ sys.setrecursionlimit(100000)  # for dfs
 def main():
 
     logger.info(
-        f'running with onnx_file_path = {cp.onnx_file_path},T = {cp.T},B = {cp.B},partition_mode = {cp.partition_mode}'
+        f'running with onnx_file_path = {c_conf.onnx_file_path},T = {c_conf.T},B = {c_conf.B},partition_mode = {c_conf.partition_mode}'
     )
-    onnx_graph = load_onnx_model(cp.onnx_file_path)
+    onnx_graph = load_onnx_model(c_conf.onnx_file_path)
 
     print_graph_nodes(onnx_graph)
 
-    instructions = process(onnx_graph)
+    instructions = cg_mapping(onnx_graph)
 
     # Output instructions in json format
     logger.info('Output instructions in json format...')
     json_instructions = json.dumps(instructions, ensure_ascii=False, indent=4)
-    with open(cp.instructions_file_path, 'w') as json_file:
+    with open(c_conf.instructions_file_path, 'w') as json_file:
         print(json_instructions, file=json_file)
     logger.info('Output instructions in json format completed.')
     logger.info('Graph-partitioning completed.')

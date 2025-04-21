@@ -1,6 +1,6 @@
 import onnx
 from onnx import shape_inference
-from logging_config import logger
+from config.logger_config import logger
 
 # mem = dict()
 

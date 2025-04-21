@@ -1,8 +1,8 @@
 import math
-from logging_config import logger
-import cimpara as cp
-from read_file import get_tensor_shape
-from graph import split_to_chain
+from config.logger_config import logger
+import config.cim_config as c_conf
+from preprocess.read_file import get_tensor_shape
+from preprocess.graph import split_to_chain
 
 '''
 feature_width: bit width of features
@@ -52,7 +52,7 @@ def calc_cores_and_time_needed(onnx_graph, node):
         # matA = [N * H_out * W_out, C_in * K_h * K_w]
         # matB = [C_in * K_h * K_w, C_out]
 
-        if cp.H * cp.m * cp.K < K_h * K_w * C_in:
+        if c_conf.H * c_conf.m * c_conf.K < K_h * K_w * C_in:
             raise Exception('The convolution operation is too large.')
 
         # replicate times allowed in the core:
@@ -61,9 +61,9 @@ def calc_cores_and_time_needed(onnx_graph, node):
         # Therefore, placing a C_out requires ceil(K_h * K_w * C_in / (H * m)) macro groups
         # Therefore, floor(K / ceil(...)) weight copies can be placed
 
-        replicate_times = cp.K // math.ceil(K_h * K_w * C_in / (cp.H * cp.m))
+        replicate_times = c_conf.K // math.ceil(K_h * K_w * C_in / (c_conf.H * c_conf.m))
 
-        cores_needed = math.ceil(C_out / cp.channels_on_a_core())
+        cores_needed = math.ceil(C_out / c_conf.channels_on_a_core())
 
         # Required computation cycles:
         # H_out * W_out inputs after img2col
@@ -75,8 +75,8 @@ def calc_cores_and_time_needed(onnx_graph, node):
         time_needed = math.ceil(
             H_out *
             W_out *
-            cp.m *
-            cp.feature_width /
+            c_conf.m *
+            c_conf.feature_width /
             replicate_times)
 
         # Time needed to load all weights
@@ -85,11 +85,11 @@ def calc_cores_and_time_needed(onnx_graph, node):
             C_in *
             K_h *
             K_w *
-            cp.weight_width /
+            c_conf.weight_width /
             8 /  # bits to Byte
-            cp.global_memory_bandwidth) * replicate_times
+            c_conf.global_memory_bandwidth) * replicate_times
 
-        # print(cores_needed, C_out, cp.channels_on_a_core())
+        # print(cores_needed, C_out, c_conf.channels_on_a_core())
         return cores_needed, time_needed, load_time_needed
 
     raise Exception('This is not a convolution operator.')
@@ -112,7 +112,7 @@ def calc_best_strategy_on_chip(
     for i in nodes_reassigned_id:
         in_nodes_reassigned_id[i] = 1
     nodecnt = len(nodes_reassigned_id)
-    pattern_pos_lists = cp.pattern_pos_lists
+    pattern_pos_lists = c_conf.pattern_pos_lists
 
     # Determine the order to place on the pattern:
     # Split the graph into chains, and then place the chains on the chip
@@ -142,10 +142,10 @@ def calc_best_strategy_on_chip(
     flag11 = False
     mul11 = 1
 
-    if sum(cores_needed_list) > cp.C:
+    if sum(cores_needed_list) > c_conf.C:
         # if there is only one core and there is only one node,
         # do the calculation in multiple times
-        if cp.C == 1 and nodecnt == 1:
+        if c_conf.C == 1 and nodecnt == 1:
             flag11 = True
             mul11 = cores_needed_list[0]
             cores_needed_list[0] = 1
@@ -170,10 +170,10 @@ def calc_best_strategy_on_chip(
 
         # This function simply allocates nodes to the chip based on the core-level weight replication times
         def put_nodes_on_chip(replicate_times):
-            assert len(pattern_pos_list) == cp.C
+            assert len(pattern_pos_list) == c_conf.C
             # First check if there are enough nodes
             if sum([cores_needed_list[i] * replicate_times[i]
-                   for i in range(nodecnt)]) > cp.C:
+                   for i in range(nodecnt)]) > c_conf.C:
                 return None
             j = 0
             allocation = []
@@ -195,12 +195,12 @@ def calc_best_strategy_on_chip(
             communication_time = 0
             for i in range(nodecnt):
                 calc_time_list[i] = math.ceil(
-                    cp.batch_size * time_needed_list[i] / len(allocation[i]))
+                    c_conf.batch_size * time_needed_list[i] / len(allocation[i]))
                 if flag11:
                     calc_time_list[i] = calc_time_list[i] * mul11
 
             most_expensive_request = 0
-            chip_node_load = [[0] * cp.Q for _ in range(cp.P)]
+            chip_node_load = [[0] * c_conf.Q for _ in range(c_conf.P)]
             global_memory_load = 0
             cluster_internel_communication_cost = [
                 [0] * len(allocation[i]) for i in range(len(allocation))]
@@ -217,16 +217,16 @@ def calc_best_strategy_on_chip(
                     core = allocation[i][sender][0]
                     for _ in range(mul11):
                         use_channel = min(
-                            channelcnt, cp.channels_on_a_core())
+                            channelcnt, c_conf.channels_on_a_core())
                         chip_node_load[core[0]][core[1]] += use_channel * \
-                            shape[2] * shape[3] * cp.feature_width // 8  # bit to Byte
+                            shape[2] * shape[3] * c_conf.feature_width // 8  # bit to Byte
                         channelcnt -= use_channel
                 else:
                     for core in allocation[i][sender]:
                         use_channel = min(
-                            channelcnt, cp.channels_on_a_core())
+                            channelcnt, c_conf.channels_on_a_core())
                         chip_node_load[core[0]][core[1]] += use_channel * \
-                            shape[2] * shape[3] * cp.feature_width // 8  # bit to Byte
+                            shape[2] * shape[3] * c_conf.feature_width // 8  # bit to Byte
                         channelcnt -= use_channel
                 assert channelcnt == 0
 
@@ -242,9 +242,9 @@ def calc_best_strategy_on_chip(
                     channelcnt = shape[1]
                     while channelcnt > 0:
                         use_channel = min(
-                            channelcnt, cp.channels_on_a_core())
+                            channelcnt, c_conf.channels_on_a_core())
                         accumulate_load[p] += use_channel * \
-                            shape[2] * shape[3] * cp.feature_width // 8
+                            shape[2] * shape[3] * c_conf.feature_width // 8
                         p = (p + 1) % len(accumulate_load)
                         channelcnt -= use_channel
                 else:
@@ -254,7 +254,7 @@ def calc_best_strategy_on_chip(
                         use_channel = shape[1] // len(accumulate_load) + \
                             min(remainder, 1)
                         accumulate_load[i] += use_channel * \
-                            shape[2] * shape[3] * cp.feature_width // 8
+                            shape[2] * shape[3] * c_conf.feature_width // 8
                         remainder -= min(remainder, 1)
 
                 circle_dis = 0
@@ -265,7 +265,7 @@ def calc_best_strategy_on_chip(
                         p + 1) % len(accumulate_load)])  # Calculate ring communication distance
 
                 cluster_internel_communication_cost[j][receiver] += math.ceil(
-                    circle_dis * max(accumulate_load) / cp.B)
+                    circle_dis * max(accumulate_load) / c_conf.B)
 
             def update_most_expensive_request(i, j, k, shape):
                 nonlocal most_expensive_request
@@ -274,7 +274,7 @@ def calc_best_strategy_on_chip(
                 channelcnt = shape[1]
                 for icoreid, icore in enumerate(allocation[i][sender]):
                     use_channel = min(
-                        channelcnt, cp.channels_on_a_core())
+                        channelcnt, c_conf.channels_on_a_core())
                     # choose a receiver and internally transmit
                     jcoreid = icoreid % len(allocation[j][receiver])
                     jcore = allocation[j][receiver][jcoreid]
@@ -283,7 +283,7 @@ def calc_best_strategy_on_chip(
                         use_channel *
                         shape[2] *
                         shape[3] *
-                        cp.feature_width //
+                        c_conf.feature_width //
                         8 *
                         (math.fabs(icore[0] - jcore[0]) +
                          math.fabs(icore[1] - jcore[1]))
@@ -294,7 +294,7 @@ def calc_best_strategy_on_chip(
             def add_load_global(shape):
                 nonlocal global_memory_load
                 global_memory_load += shape[1] * shape[2] * \
-                    shape[3] * cp.feature_width // 8
+                    shape[3] * c_conf.feature_width // 8
                 # print(shape)
 
             for i in range(nodecnt):
@@ -311,7 +311,7 @@ def calc_best_strategy_on_chip(
                     # The receiver has replicate_times[j] replicas
                     # The k-th batch(0-based) should be \
                     # sent from the k%replicate_times[i]-th replica to k%replicate_times[j]-th replica
-                    for k in range(cp.batch_size):
+                    for k in range(c_conf.batch_size):
                         if (nodes_reassigned_id[i],
                                 nodes_reassigned_id[j]) not in communicate_on_chip:
                             # If it is not on-chip communication, use global memory
@@ -334,7 +334,7 @@ def calc_best_strategy_on_chip(
 
                     shape = reassigned_id_graph_edgeset[(j, nodes_reassigned_id[i])]
 
-                    for k in range(cp.batch_size):
+                    for k in range(c_conf.batch_size):
                         # i is the receiver, reading from global memory
                         add_load_global(shape)
                         add_load_receiver(i, k, shape, True)
@@ -344,7 +344,7 @@ def calc_best_strategy_on_chip(
                     shape = input_data_conv_node_reassigned_id[nodes_reassigned_id[i]]
                     onnx_graph.input[0].name
                     # print(shape)
-                    for k in range(cp.batch_size):
+                    for k in range(c_conf.batch_size):
                         add_load_global(shape)
                         add_load_receiver(i, k, shape, True)
                         # print("read from global",i)
@@ -365,15 +365,15 @@ def calc_best_strategy_on_chip(
                 if flag or nodes_reassigned_id[i] in output_data_conv_node_reassigned_id:
                     if shape is None:
                         shape = output_data_conv_node_reassigned_id[nodes_reassigned_id[i]]
-                    for k in range(cp.batch_size):
+                    for k in range(c_conf.batch_size):
                         add_load_sender(i, k, shape)
                         add_load_global(shape)
                         # print("write to global",i)
 
             # Calculate communication time
-            communication_time = max(math.ceil(max([max(_) for _ in chip_node_load]) / cp.B),
-                                     math.ceil(global_memory_load / cp.global_memory_bandwidth),
-                                     math.ceil(most_expensive_request / cp.B))
+            communication_time = max(math.ceil(max([max(_) for _ in chip_node_load]) / c_conf.B),
+                                     math.ceil(global_memory_load / c_conf.global_memory_bandwidth),
+                                     math.ceil(most_expensive_request / c_conf.B))
             communication_time += max(max(_)
                                       for _ in cluster_internel_communication_cost)
             communication_time += sum([load_time_needed_list[i]
@@ -381,24 +381,24 @@ def calc_best_strategy_on_chip(
 
             calc_time = max(calc_time_list)
 
-            if cp.partition_mode == 3:
+            if c_conf.partition_mode == 3:
                 communication_time *= 2
-            elif cp.partition_mode == 4:
+            elif c_conf.partition_mode == 4:
                 calc_time = sum(calc_time_list)
-            elif cp.partition_mode == 5:
+            elif c_conf.partition_mode == 5:
                 communication_time -= sum([load_time_needed_list[i]
                                            * replicate_times[i] for i in range(nodecnt)])
                 communication_time += sum([load_time_needed_list[i] //
                                           2 for i in range(nodecnt)])
-            elif cp.partition_mode == 6:
-                calc_time = sum(calc_time_list) + max(calc_time_list) * cp.batch_size
+            elif c_conf.partition_mode == 6:
+                calc_time = sum(calc_time_list) + max(calc_time_list) * c_conf.batch_size
                 communication_time = communication_time
             return calc_time_list, calc_time + communication_time  # ,
             # max(calc_time_list), \
             # communication_time, \
-            # math.ceil(max([max(_) for _ in chip_node_load]) / cp.B), \
-            # math.ceil(global_memory_load / cp.global_memory_bandwidth), \
-            # math.ceil(most_expensive_request / cp.B), \
+            # math.ceil(max([max(_) for _ in chip_node_load]) / c_conf.B), \
+            # math.ceil(global_memory_load / c_conf.global_memory_bandwidth), \
+            # math.ceil(most_expensive_request / c_conf.B), \
             # max(max(_) for _ in cluster_internel_communication_cost), \
             # sum([load_time_needed_list[i] * replicate_times[i] for i in
             # range(nodecnt)])
@@ -407,7 +407,7 @@ def calc_best_strategy_on_chip(
         best_allocation = None
         # best_pack = None
 
-        if cp.partition_mode in [0, 1, 3, 4, 5, 6]:
+        if c_conf.partition_mode in [0, 1, 3, 4, 5, 6]:
             logger.debug(f"Iteration begin:")
             while True:
                 logger.debug("New loop, replicate_times: {}".format(replicate_times))
@@ -433,8 +433,8 @@ def calc_best_strategy_on_chip(
                 j = 0
                 assert (len(calc_time_list_id) == nodecnt)
                 while j < nodecnt:
-                    if replicate_times[calc_time_list_id[j][1]] + 1 <= cp.batch_size and used_core_num + \
-                            cores_needed_list[calc_time_list_id[j][1]] <= cp.C:
+                    if replicate_times[calc_time_list_id[j][1]] + 1 <= c_conf.batch_size and used_core_num + \
+                            cores_needed_list[calc_time_list_id[j][1]] <= c_conf.C:
                         replicate_times[calc_time_list_id[j][1]] += 1
                         break
                     else:
@@ -463,7 +463,7 @@ def calc_best_strategy_on_chip(
             #         load_time_needed_all}''')
             # logger.debug(f'load time: {load_time_needed_all}')
         else:
-            assert cp.partition_mode == 2
+            assert c_conf.partition_mode == 2
             logger.debug(f'Greedy mode, no replicate.')
             allocation = put_nodes_on_chip(replicate_times)
             pack = get_cost_for_an_allocation(allocation)

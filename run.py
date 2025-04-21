@@ -1,26 +1,26 @@
+import math
 import os
 import sys
 import argparse
 import main
-import cimpara
-from model_simplify import simplify_model
-
-output_dir = './instruction_files'
-os.makedirs(output_dir, exist_ok=True)
+import config.cim_config as c_conf
+from preprocess.model_preprocess import simplify_model
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-T', type=int, default=4, help="T in {4, 8, 12, 16}")
-parser.add_argument('-B', type=int, default=8, help="B in {1, 8, 16}")
+parser.add_argument('-B', type=int, default=8, help="B in {8, 16}")
 parser.add_argument('-C', type=int, default=64, help="C in {1, 64, 144}")
-parser.add_argument('--model-path', type=str, required=True, help="onnx model file path, e.g. ./model_files/resnet18.onnx")
+parser.add_argument('--batch-size', type=int, default=8, help="batch size")
+parser.add_argument('--model-path', type=str, required=True, help="onnx model file path, e.g. data/model_files/resnet18.onnx")
 parser.add_argument('--strategy', type=str, default="dp", help="strategy in {dp, baseline1, baseline2, 2x_communication_time, sum_calc_time, 0.5x_load_time, pipelined_calculate_time}")
+parser.add_argument('--output_dir', type=str, default="data/instruction_files", help="output directory for the instruction files")
 
 args = parser.parse_args()
 
 if args.T not in [4, 8, 12, 16]:
     sys.exit("T should be in {4, 8, 12, 16}")
-if args.B not in [1, 8, 16]:
-    sys.exit("B should be in {1, 8, 16}")
+if args.B not in [8, 16]:
+    sys.exit("B should be in {8, 16}")
 
 if not os.path.isfile(args.model_path):
     sys.exit(f"Model file doesn't exist: {args.model_path}")
@@ -54,15 +54,22 @@ elif args.strategy == 'dp':
 else:
     partition_mode = 0
 
-cimpara.onnx_file_path = simplified_path
-if not os.path.exists(cimpara.onnx_file_path):
-    sys.exit(f"onnx file doesn't exist: {cimpara.onnx_file_path}")
+c_conf.onnx_file_path = simplified_path
+if not os.path.exists(c_conf.onnx_file_path):
+    sys.exit(f"onnx file doesn't exist: {c_conf.onnx_file_path}")
 
-cimpara.T = args.T
-cimpara.B = args.B
-cimpara.C = args.C
-cimpara.partition_mode = partition_mode
-cimpara.update_pos_lists()
-cimpara.instructions_file_path = f'{output_dir}/instructions_{model_name}_{args.strategy}_T{args.T}_B{args.B}.json'
+c_conf.T = args.T
+c_conf.B = args.B
+c_conf.C = args.C
+c_conf.batch_size = args.batch_size
+c_conf.P = int(math.sqrt(args.C))
+c_conf.Q = int(c_conf.P)
+c_conf.partition_mode = partition_mode
+c_conf.update_pos_lists()
+output_dir = args.output_dir
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+
+c_conf.instructions_file_path = f'{output_dir}/instructions_{model_name}_{args.strategy}_T{args.T}_B{args.B}_C{args.C}_batch{c_conf.batch_size}.json'
 
 main.main()

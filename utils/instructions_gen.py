@@ -1,7 +1,7 @@
-import cimpara as cp
+import config.cim_config as c_conf
 from collections import deque
-from read_file import get_tensor_shape
-from logging_config import logger
+from preprocess.read_file import get_tensor_shape
+from config.logger_config import logger
 
 import random
 import string
@@ -33,8 +33,8 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
 
     # Initialize instructions for each core
     instructions = dict()
-    for i in range(cp.P):
-        for j in range(cp.Q):
+    for i in range(c_conf.P):
+        for j in range(c_conf.Q):
             instructions[f'core_{i}_{j}'] = {
                 'cluster_id': -1,
                 'weight_replica_id': -1,
@@ -57,7 +57,7 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                     'weight_replica_id': j,
                     'instructions': []
                 }
-                use_channel = min(channelcnt, cp.channels_on_a_core())
+                use_channel = min(channelcnt, c_conf.channels_on_a_core())
                 instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                     'op': 'read',
                     'attr': {
@@ -110,7 +110,7 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
             channelcnt = shape[1]
             while channelcnt != 0:
                 for icore in icores:
-                    use_channel = min(cp.channels_on_a_core(), channelcnt)
+                    use_channel = min(c_conf.channels_on_a_core(), channelcnt)
                     instructions[f'core_{icore[0]}_{icore[1]}']['instructions'].append({
                         'op': 'write',
                         'attr': {
@@ -119,7 +119,7 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                         }
                     })
                     channelcnt -= use_channel
-                if cp.C == 1:
+                if c_conf.C == 1:
                     assert nodecnt == 1, "something is wrong"
                 else:
                     assert channelcnt == 0, "something is wrong"
@@ -132,7 +132,7 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
             p = 0
             channelcnt = shape[1]
             for q in range(len(icores)):
-                use_channel = min(channelcnt, cp.channels_on_a_core())
+                use_channel = min(channelcnt, c_conf.channels_on_a_core())
                 accumulate_load_channelcnt[p] += use_channel
                 frm = icores[q]
                 to = jcores[p]
@@ -221,7 +221,7 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                         f'_in_cluster_part_{src}'
                     add_send_receive(frm, to, src, tensor_name)
 
-    for k in range(cp.batch_size):  # for every batch
+    for k in range(c_conf.batch_size):  # for every batch
         for i_topsort_id in range(nodecnt):  # for every node in topological order
             i = id_topsort[i_topsort_id]
 
@@ -279,7 +279,7 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                 channelcnt = weight_shape[0]
                 while channelcnt != 0:
                     for coreid in range(core_num):
-                        use_channel = min(channelcnt, cp.channels_on_a_core())
+                        use_channel = min(channelcnt, c_conf.channels_on_a_core())
                         assert use_channel != 0
                         core = allocation[i][runner][coreid]
                         channelcnt -= use_channel

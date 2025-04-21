@@ -1,13 +1,13 @@
-from graph import build_graph, find_all_prefixes, get_belong_node, topsort
-from calc_cost import calc_best_strategy_on_chip
-from read_file import get_tensor_shape
-from partition_result_gen import get_instrctions_for_a_stage
-from logging_config import logger
-import cimpara as cp
+from preprocess.graph import build_graph, find_all_prefixes, get_belong_node, topsort
+from optimization.cost import calc_best_strategy_on_chip
+from preprocess.read_file import get_tensor_shape
+from utils.instructions_gen import get_instrctions_for_a_stage
+from config.logger_config import logger
+import config.cim_config as c_conf
 import math
 
 
-def process(onnx_graph):
+def cg_mapping(onnx_graph):
     graph = build_graph(onnx_graph)
 
     is_conv_node = []
@@ -91,7 +91,7 @@ def process(onnx_graph):
     prefixes_bitmask_reassigned_id = find_all_prefixes(reassigned_id_graph)
     stages = []
 
-    if cp.partition_mode in [0, 3, 4, 5, 6]:
+    if c_conf.partition_mode in [0, 3, 4, 5, 6]:
         # DP for strategy
         dp_stages = [math.inf] * len(prefixes_bitmask_reassigned_id)
         dp_stages_from = [-1] * len(dp_stages)
@@ -186,7 +186,7 @@ def process(onnx_graph):
                         for i in range(len(stage[0]))])
                     + ']')
 
-    instructions = {f'core_{i}_{j}': {'stages': {}} for i in range(cp.P) for j in range(cp.Q)}
+    instructions = {f'core_{i}_{j}': {'stages': {}} for i in range(c_conf.P) for j in range(c_conf.Q)}
     sorted_nodes = topsort(graph)
 
     logger.info(f'Generating instructions...')
@@ -209,8 +209,8 @@ def process(onnx_graph):
             onnx_graph
         )
 
-        for i in range(cp.P):
-            for j in range(cp.Q):
+        for i in range(c_conf.P):
+            for j in range(c_conf.Q):
                 core_name = f'core_{i}_{j}'
                 instructions[core_name]['stages'][str(stageid)] = {
                     'cluster_id': instruction_cur[core_name]['cluster_id'],

@@ -1,5 +1,5 @@
 from collections import deque
-from logging_config import logger
+from config.logger_config import logger
 
 # Returns a [([in_nodes],[out_nodes])] to represent a DAG. 
 # The number corresponds to graph.node one by one

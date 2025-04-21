@@ -1,4 +1,6 @@
 import logging
+import os
+from datetime import datetime
 
 logger = logging.getLogger('graph_partitioning')
 logger.setLevel(logging.DEBUG)
@@ -9,8 +11,9 @@ console_handler.setFormatter(logging.Formatter(
     "%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logger.addHandler(console_handler)
 
-file_handler = logging.FileHandler(
-    'cim_framework_graph_partitioning.log', mode='w')
+os.makedirs('data/logs/', exist_ok=True)
+log_filename = datetime.now().strftime("CG_log_%Y-%m-%d_%H-%M-%S.log")
+file_handler = logging.FileHandler("data/logs/" + log_filename, mode='w')
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(logging.Formatter(
     "%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
