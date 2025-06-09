@@ -13,6 +13,7 @@ def get_unique_id(length=15):
 
 
 def get_instrctions_for_a_stage(  # see process.py for more details about the parameters
+        stage_id,
         allocation,
         nodes_reassigned_id,
         communicate_on_chip,
@@ -26,6 +27,9 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
         belong_node,
         sorted_nodes,  # All nodes in the original graph, topsorted
         onnx_graph):
+
+    def get_inst_group_id(core, op):
+        return 'core_{}.stage_{}.{}.inst_{}'.format(core[0]*c_conf.Q + core[1], stage_id, op, len(instructions[f'core_{core[0]}_{core[1]}']['instructions']))
 
     in_nodes_reassigned_id = [0] * len(graph)
     for i in nodes_reassigned_id:
@@ -63,7 +67,8 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                     'attr': {
                         'tensor_type': 'weight',
                         'shape': [use_channel, filter_shape[1],
-                                  filter_shape[2], filter_shape[3]]
+                                  filter_shape[2], filter_shape[3]],
+                        'inst_group_id': get_inst_group_id(core, 'read_weight')
                     }
                 })
                 channelcnt -= use_channel
@@ -115,7 +120,8 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                         'op': 'write',
                         'attr': {
                             'tensor_type': 'feature',
-                            'shape': [1, use_channel, shape[2], shape[3]]
+                            'shape': [1, use_channel, shape[2], shape[3]],
+                            'inst_group_id': get_inst_group_id(icore, 'write_feature'),
                         }
                     })
                     channelcnt -= use_channel
@@ -142,7 +148,8 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                     'attr': {
                         'dist_core_name': f'core_{to[0]}_{to[1]}',
                         'shape': [1, use_channel, shape[2], shape[3]],
-                        'name': tensor_name_prefix + f'_btw_clusters_part_{q}'
+                        'name': tensor_name_prefix + f'_btw_clusters_part_{q}',
+                        'inst_group_id': get_inst_group_id(frm, 'send')
                     }
                 })
                 instructions[f'core_{to[0]}_{to[1]}']['instructions'].append({
@@ -150,7 +157,8 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                     'attr': {
                         'src_core_name': f'core_{frm[0]}_{frm[1]}',
                         'shape': [1, use_channel, shape[2], shape[3]],
-                        'name': tensor_name_prefix + f'_btw_clusters_part_{q}'
+                        'name': tensor_name_prefix + f'_btw_clusters_part_{q}',
+                        'inst_group_id': get_inst_group_id(to, 'receive')
                     }
                 })
 
@@ -167,7 +175,8 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                     'op': 'read',
                     'attr': {
                         'tensor_type': 'feature',
-                        'shape': [1, use_channel, shape[2], shape[3]]
+                        'shape': [1, use_channel, shape[2], shape[3]],
+                        'inst_group_id': get_inst_group_id(core, 'read_feature')
                     }
                 })
                 accumulate_load_channelcnt[l] += use_channel
@@ -179,7 +188,8 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                 'attr': {
                     'dist_core_name': f'core_{to[0]}_{to[1]}',
                     'shape': [1, accumulate_load_channelcnt[src], shape[2], shape[3]],
-                    'name': tensor_name
+                    'name': tensor_name,
+                    'inst_group_id': get_inst_group_id(frm, 'send')
                 }
             })
             instructions[f'core_{to[0]}_{to[1]}']['instructions'].append({
@@ -187,7 +197,8 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                 'attr': {
                     'src_core_name': f'core_{frm[0]}_{frm[1]}',
                     'shape': [1, accumulate_load_channelcnt[src], shape[2], shape[3]],
-                    'name': tensor_name
+                    'name': tensor_name,
+                    'inst_group_id': get_inst_group_id(to, 'receive')
                 }
             })
 
@@ -303,7 +314,8 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                                         'X_shape': X_shape,
                                         'W_shape': W_shape,
                                         'padding': list(padding),
-                                        'strides': list(strides)
+                                        'strides': list(strides),
+                                        'inst_group_id': get_inst_group_id(core, 'conv')
                                     }
                                 })
                             else:  # depthwise conv
@@ -320,14 +332,16 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                                         'X_shape': X_shape,
                                         'W_shape': W_shape,
                                         'padding': list(padding),
-                                        'strides': list(strides)
+                                        'strides': list(strides),
+                                        'inst_group_id': get_inst_group_id(core, 'depthwise_conv')
                                     }
                                 })
                         elif op_type == 'Add' and onnx_graph.node[nodeid].input[1].find('zero_point') == -1:
                             instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
                                 'op': 'add',
                                 'attr': {
-                                    'shape': [1, use_channel, output_shape[2], output_shape[3]]
+                                    'shape': [1, use_channel, output_shape[2], output_shape[3]],
+                                    'inst_group_id': get_inst_group_id(core, 'add')
                                 }
                             })
                         else:

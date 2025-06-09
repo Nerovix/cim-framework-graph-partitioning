@@ -7,13 +7,14 @@ import config.cim_config as c_conf
 from preprocess.model_preprocess import simplify_model
 
 parser = argparse.ArgumentParser()
-parser.add_argument('-T', type=int, default=4, help="T in {4, 8, 12, 16}")
-parser.add_argument('-B', type=int, default=8, help="B in {8, 16}")
+parser.add_argument('-T', type=int, default=8, help="T in {4, 8, 12, 16}")
+parser.add_argument('-B', type=int, default=16, help="B in {8, 16}")
 parser.add_argument('-C', type=int, default=64, help="C in {1, 64, 144}")
 parser.add_argument('--batch-size', type=int, default=8, help="batch size")
 parser.add_argument('--model-path', type=str, required=True, help="onnx model file path, e.g. data/model_files/resnet18.onnx")
 parser.add_argument('--strategy', type=str, default="dp", help="strategy in {dp, baseline1, baseline2, 2x_communication_time, sum_calc_time, 0.5x_load_time, pipelined_calculate_time}")
 parser.add_argument('--output_dir', type=str, default="data/instruction_files", help="output directory for the instruction files")
+parser.add_argument('--visualize', action='store_true', help="whether to visualize the partitioning result")
 
 args = parser.parse_args()
 
@@ -71,5 +72,6 @@ if not os.path.exists(output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
 c_conf.instructions_file_path = f'{output_dir}/instructions_{model_name}_{args.strategy}_T{args.T}_B{args.B}_C{args.C}_batch{c_conf.batch_size}.json'
+c_conf.visualize_flag = args.visualize
 
 main.main()
