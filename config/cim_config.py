@@ -3,11 +3,13 @@ import importlib.util
 import utils.pattern_maps_gen as pm_gen
 import time
 
-onnx_file_path = "../data/model_files/efficientnet-simplified.onnx"
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+onnx_file_path = "model.onnx"
 
 instructions_file_path = 'instructions.json'
 
-plots_output_path = 'data/plots/' + time.strftime("%Y%m%d-%H%M%S") + '/'
+plots_output_path = project_root + '/data/plots/' + time.strftime("%Y%m%d-%H%M%S") + '/'
 plot_output_filename="computation_graph.png"
 plot_output_filename_template="partition_stage_{}.png"
 visualize_flag = False
