@@ -246,7 +246,7 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
             # Only consider reading from global memory, receiving from others will be handled later
             for j in reassigned_id_rev_graph[nodes_reassigned_id[i]]:
                 if in_nodes_reassigned_id[j] == 1:
-                    continue  # 不在此stage
+                    continue  # not in this stage
 
                 shape = reassigned_id_graph_edgeset[(j, nodes_reassigned_id[i])]
                 add_communication_instructions(None,
@@ -267,10 +267,6 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
             in_cluster_nodes = [
                 _ for _ in sorted_nodes if belong_node[_] == reassigned_id_to_node_id[nodes_reassigned_id[i]]]
             output_shape = get_tensor_shape(
-                # Assume other ops attached to this conv node have same input size as the output size of the conv node
-                # This assumption is not 100% accurate, but considering activation sizes don't vary much between adjacent layers,
-                # We'll handle it this way for now
-                # May change how other nodes attach to conv later
                 onnx_graph,
                 onnx_graph.node[reassigned_id_to_node_id[nodes_reassigned_id[i]]].output[0])
 
@@ -344,8 +340,46 @@ def get_instrctions_for_a_stage(  # see process.py for more details about the pa
                                     'inst_group_id': get_inst_group_id(core, 'add')
                                 }
                             })
+                        elif op_type == 'MaxPool':
+                            shape = get_tensor_shape(onnx_graph, onnx_graph.node[nodeid].input[0])
+                            pads_container = [attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'pads'][0]
+                            strides_container = [attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'strides'][0]
+                            kernel_container = [attr.ints for attr in onnx_graph.node[nodeid].attribute if attr.name == 'kernel_shape'][0]
+
+                            op = {
+                                'op': 'maxpool',
+                                'attr': {
+                                    'X_shape': [1, shape[1], shape[2], shape[3]],
+                                    'padding': list(pads_container),
+                                    'strides': list(strides_container),
+                                    'kernel_shape': list(kernel_container)
+                                }
+                            }
+                            # logger.info(f'Adding maxpool instruction: {op}')
+                            instructions[f'core_{core[0]}_{core[1]}']['instructions'].append({
+                                'op': 'maxpool',
+                                'attr': {
+                                    'X_shape': [1, shape[1], shape[2], shape[3]],
+                                    'padding': list(pads_container),
+                                    'strides': list(strides_container),
+                                    'kernel_shape': list(kernel_container)
+                                }
+                            })
+                        elif op_type == 'GlobalAveragePool':
+                            shape = get_tensor_shape(onnx_graph, onnx_graph.node[nodeid].input[0])
+                            # oshape = get_tensor_shape(onnx_graph, onnx_graph.node[nodeid].output[0])
+                            op = {
+                                'op': 'globalaveragepool',
+                                'attr': {
+                                    'X_shape': [1, shape[1], shape[2], shape[3]]
+                                }
+                            }
+                            # logger.info(f'Adding globalaveragepool instruction: {op}')
+                            # logger.info(f'shape: {shape}')
+                            # logger.info(f'oshape: {oshape}')
+                            instructions[f'core_{core[0]}_{core[1]}']['instructions'].append(op)
                         else:
-                            # unimportant operators, do nothing
+                            # operators we currently don't care, do nothing
                             pass
 
             # Output：

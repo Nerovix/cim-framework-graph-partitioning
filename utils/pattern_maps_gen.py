@@ -22,6 +22,7 @@ from pprint import pformat
 from typing import Dict, List, Tuple
 import math
 import sys, textwrap
+import os
 import warnings
 
 Grid = List[List[int]]
@@ -209,6 +210,7 @@ def make_pattern_maps(n_cores: int, pm_path: str) -> Dict[str, Grid]:
 
     globals()[f"pattern_maps_{n_cores}"] = [patt0, patt1, patt2, patt3]
     # write them to a file
+    os.makedirs(os.path.dirname(pm_path), exist_ok=True)
     with open(pm_path, "w") as f:
         f.write(f"# auto-generated pattern maps:\n")
         f.write(f"pattern_maps_{n_cores} = \\\n")

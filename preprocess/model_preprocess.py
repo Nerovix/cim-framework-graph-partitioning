@@ -28,9 +28,9 @@ def simplify_model(model_path, model_name, input_shape=(1, 3, 32, 32)):
         onnx.checker.check_model(loaded_model)
 
         simplified_path = project_root + '/data/simplified_model_files'
-        if not os.path.exists():
+        if not os.path.exists(path = simplified_path):
             os.makedirs(simplified_path, exist_ok=True)
-        onnx.save(loaded_model, simplified_path)
+        onnx.save(loaded_model, simplified_model_path)
         return simplified_model_path
 
     sys.exit(f'failed to open onnx file {model_path}')
