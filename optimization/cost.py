@@ -53,7 +53,7 @@ def calc_cores_and_time_needed(onnx_graph, node):
         # matB = [C_in * K_h * K_w, C_out]
 
         if c_conf.H * c_conf.m * c_conf.K < K_h * K_w * C_in:
-            raise Exception('The convolution operation is too large.')
+            raise Exception('The convolution operation is too large, something is wrong with the preprocessing.')
 
         # replicate times allowed in the core:
         # Each C_out requires K_h * K_w * C_in weights

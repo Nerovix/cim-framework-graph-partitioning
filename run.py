@@ -8,6 +8,7 @@ from preprocess.model_preprocess import simplify_model
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-T', type=int, default=8, help="T in {4, 8, 12, 16}")
+parser.add_argument('-K', type=int, default=16, help="K in {4, 8, 16}")
 parser.add_argument('-B', type=int, default=16, help="B in {8, 16}")
 parser.add_argument('-C', type=int, default=64, help="C in {1, 64, 144}")
 parser.add_argument('--batch-size', type=int, default=8, help="batch size")
@@ -20,6 +21,8 @@ args = parser.parse_args()
 
 if args.T not in [4, 8, 12, 16]:
     sys.exit("T should be in {4, 8, 12, 16}")
+if args.K not in [4, 8, 16]:
+    sys.exit("K should be in {4, 8, 16}")
 if args.B not in [8, 16]:
     sys.exit("B should be in {8, 16}")
 
@@ -60,6 +63,7 @@ if not os.path.exists(c_conf.onnx_file_path):
     sys.exit(f"onnx file doesn't exist: {c_conf.onnx_file_path}")
 
 c_conf.T = args.T
+c_conf.K = args.K
 c_conf.B = args.B
 c_conf.C = args.C
 c_conf.batch_size = args.batch_size

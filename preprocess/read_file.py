@@ -8,9 +8,8 @@ from config.logger_config import logger
 def load_onnx_model(file_path):
     model = onnx.load(file_path)
     inferred_model = shape_inference.infer_shapes(model)
-    graph = inferred_model.graph
     # mem=dict()
-    return graph
+    return inferred_model
 
 
 def print_graph_nodes(graph):

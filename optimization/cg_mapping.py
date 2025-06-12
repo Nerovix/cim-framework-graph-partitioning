@@ -1,6 +1,8 @@
 from preprocess.graph import build_graph, find_all_prefixes, get_belong_node, topsort
 from optimization.cost import calc_best_strategy_on_chip
 from preprocess.read_file import get_tensor_shape
+from preprocess.model_preprocess import onnx_split_large_conv_pass
+from preprocess.read_file import print_graph_nodes
 from utils.instructions_gen import get_instrctions_for_a_stage
 from utils.visualizer import visualize_computation_graph, visualize_chip_allocation_per_stage
 from config.logger_config import logger
@@ -8,8 +10,14 @@ import config.cim_config as c_conf
 import math
 
 
-def cg_mapping(onnx_graph):
+def cg_mapping(model):
+    onnx_split_large_conv_pass(model)
+    onnx_graph = model.graph
+
+    print_graph_nodes(onnx_graph)
+
     graph = build_graph(onnx_graph)
+    
 
     is_conv_node = []
     is_fc_node = []
@@ -192,28 +200,27 @@ def cg_mapping(onnx_graph):
 
     if c_conf.visualize_flag:
         logger.info('Visualizing computation graph...')
-        if number_of_conv_nodes > 0: # Check if there's anything to visualize
+        if number_of_conv_nodes > 0:  # Check if there's anything to visualize
             visualize_computation_graph(reassigned_id_graph, stages, reassigned_id_to_node_id, output_dir=c_conf.plots_output_path, output_filename=c_conf.plot_output_filename)
         else:
             logger.info("No convolution nodes to visualize in the graph.")
 
-        
         logger.info(f'Visualizing core allocation for {len(stages)} stages...')
         for stage_idx, stage_content in enumerate(stages):
             alloc, nodes_reassigned_id_in_stage, _, _ = stage_content
-            if not alloc: # Skip if allocation is empty for some reason
+            if not alloc:  # Skip if allocation is empty for some reason
                 logger.info(f"Skipping visualization for empty Stage {stage_idx}")
                 continue
 
             visualize_chip_allocation_per_stage(
                 alloc_info=alloc,
                 nodes_in_stage_reassigned_ids=nodes_reassigned_id_in_stage,
-                p_cores=c_conf.P, # Assuming c_conf is imported and P, Q are attributes
+                p_cores=c_conf.P,  # Assuming c_conf is imported and P, Q are attributes
                 q_cores=c_conf.Q,
                 stage_idx=stage_idx,
                 reassigned_id_to_node_id=reassigned_id_to_node_id,
                 output_dir=c_conf.plots_output_path,
-                output_filename_template= c_conf.plot_output_filename_template
+                output_filename_template=c_conf.plot_output_filename_template
             )
 
     logger.info(f'Generating instructions...')

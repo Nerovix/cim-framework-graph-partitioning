@@ -13,11 +13,11 @@ def main():
     logger.info(
         f'running with onnx_file_path = {c_conf.onnx_file_path},T = {c_conf.T},B = {c_conf.B},partition_mode = {c_conf.partition_mode}'
     )
-    onnx_graph = load_onnx_model(c_conf.onnx_file_path)
+    model = load_onnx_model(c_conf.onnx_file_path)
 
-    print_graph_nodes(onnx_graph)
+    print_graph_nodes(model.graph)
 
-    instructions = cg_mapping(onnx_graph)
+    instructions = cg_mapping(model)
 
     # Output instructions in json format
     logger.info('Output instructions in json format...')
