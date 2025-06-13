@@ -122,17 +122,32 @@ def onnx_split_large_conv_pass(orig_model: onnx.ModelProto):
             slice_outputs.append(conv_out)
             c_in_offset = end
 
-        acc = slice_outputs[0]
-        for j in range(1, len(slice_outputs)):
-            add_out = node.output[0] if j == len(slice_outputs) - 1 else f"{node.name}_add_{j}"
-            add_node = helper.make_node(
-                "Add",
-                inputs=[acc, slice_outputs[j]],
-                outputs=[add_out],
-                name=f"{node.name}_Add_part{j}"
-            )
-            new_nodes.append(add_node)
-            acc = add_out
+        # build a balanced add tree over slice_outputs
+        outputs = slice_outputs.copy()
+        level = 0
+        # iteratively pairwise add until one output remains
+        while len(outputs) > 1:
+            next_outputs = []
+            for i in range(0, len(outputs), 2):
+                if i + 1 < len(outputs):
+                    a = outputs[i]
+                    b = outputs[i+1]
+                    # determine output name: final output uses original node.output[0]
+                    is_last = (len(outputs) == 2)
+                    out_name = node.output[0] if is_last else f"{node.name}_add_l{level}_{i//2}"
+                    add_node = helper.make_node(
+                        "Add",
+                        inputs=[a, b],
+                        outputs=[out_name],
+                        name=f"{node.name}_Add_l{level}_{i//2}"
+                    )
+                    new_nodes.append(add_node)
+                    next_outputs.append(out_name)
+                else:
+                    # odd number, carry forward
+                    next_outputs.append(outputs[i])
+            outputs = next_outputs
+            level += 1
 
     onnx_graph.ClearField("node")
     onnx_graph.node.extend(new_nodes)
