@@ -17,7 +17,15 @@ def main():
 
     print_graph_nodes(model.graph)
 
-    instructions = cg_mapping(model)
+    instructions,stages = cg_mapping(model)
+    
+    alloc, nodes_reassigned_id, cores_needed_list, communicate_on_chip_edgeset,pattern_pos_list = stages[0]
+    with open("beginning_stage_pattern.txt", "w") as f:
+        pattern_map=[[0 for _ in range(c_conf.Q)] for _ in range(c_conf.P)]
+        for i in range(len(pattern_pos_list)):
+            pattern_map[pattern_pos_list[i][0]][pattern_pos_list[i][1]] = i
+        print(pattern_map, file=f)    
+        
 
     # Output instructions in json format
     logger.info('Output instructions in json format...')

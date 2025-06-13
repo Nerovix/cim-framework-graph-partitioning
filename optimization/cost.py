@@ -151,7 +151,7 @@ def calc_best_strategy_on_chip(
             cores_needed_list[0] = 1
         else:
             logger.debug("Cannot be placed on the chip, no enough cores.")
-            return math.inf, None, None, None, None
+            return math.inf, None, None, None, None,None
 
     logger.debug('nodes_reassigned_id:' + str(nodes_reassigned_id))
     logger.debug('cores_needed_list:' + str(cores_needed_list))
@@ -163,6 +163,7 @@ def calc_best_strategy_on_chip(
         return math.fabs(core0[0] - core1[0]) + math.fabs(core0[1] - core1[1])
 
     best_time_all_patterns = math.inf
+    best_pattern_pos_list = None
     best_allocation_all_patterns = None
     for pattern_pos_list_idx, pattern_pos_list in enumerate(pattern_pos_lists):
         logger.debug(f'Try pattern {pattern_pos_list_idx}(0-index, {len(pattern_pos_lists)} in total):')
@@ -211,7 +212,7 @@ def calc_best_strategy_on_chip(
                 sender = k % replicate_times[i]
                 channelcnt = shape[1]
                 assert len(allocation[i][sender]) == cores_needed_list[i]
-                
+
                 if flag11:
                     assert len(allocation[i][sender]) == 1
                     core = allocation[i][sender][0]
@@ -300,7 +301,7 @@ def calc_best_strategy_on_chip(
             for i in range(nodecnt):
                 for j in range(nodecnt):
                     if (nodes_reassigned_id[i], nodes_reassigned_id[j]
-                        ) not in reassigned_id_graph_edgeset:
+                            ) not in reassigned_id_graph_edgeset:
                         continue
                     assert not flag11, "1-core-1-node-multiple-times situation but in stage \
                                         communication occurred, something is wrong..."
@@ -474,7 +475,8 @@ def calc_best_strategy_on_chip(
         if best_time < best_time_all_patterns:
             best_time_all_patterns = best_time
             best_allocation_all_patterns = best_allocation
+            best_pattern_pos_list = pattern_pos_list
             # best_pack_all_patterns = best_pack
 
     # nodes_reassigned_id have already been reordered, we need to return the new order.
-    return best_time_all_patterns, best_allocation_all_patterns, nodes_reassigned_id, cores_needed_list, communicate_on_chip
+    return best_time_all_patterns, best_allocation_all_patterns, nodes_reassigned_id, cores_needed_list, communicate_on_chip, best_pattern_pos_list

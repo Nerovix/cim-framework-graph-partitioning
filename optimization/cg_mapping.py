@@ -133,7 +133,7 @@ def cg_mapping(model):
                     # nodes_reassigned_id: A list of reassigned id, consists of the same nodes as s, but reordered in the process of calculating the best strategy. Its order now corresponds to the order of alloc[].
                     # cores_needed_list: A list of list of cores needed for each node in nodes_reassigned_id. cores_needed_list[i] = len(alloc[i])
                     # communicate_on_chip_edgeset: A set of edges that need to communicate on chip. Used for generating instructions. Other edges not in this edgeset use global memory to communicate.
-                    cost, alloc, nodes_reassigned_id, cores_needed_list, communicate_on_chip_edgeset = calc_best_strategy_on_chip(
+                    cost, alloc, nodes_reassigned_id, cores_needed_list, communicate_on_chip_edgeset, pattern_post_list = calc_best_strategy_on_chip(
                         s,
                         reassigned_id_graph,
                         reassigned_id_rev_graph,
@@ -150,7 +150,8 @@ def cg_mapping(model):
                             alloc,
                             nodes_reassigned_id,
                             cores_needed_list,
-                            communicate_on_chip_edgeset)
+                            communicate_on_chip_edgeset,
+                            pattern_post_list)
 
             logger.info(f'DP state of prefix {i} is transferred from prefix {dp_stages_from[i]}')
 
@@ -229,7 +230,7 @@ def cg_mapping(model):
 
     logger.info(f'Generating instructions...')
     for stageid, stage in enumerate(stages):
-        alloc, nodes_reassigned_id, cores_needed_list, communicate_on_chip_edgeset = stage
+        alloc, nodes_reassigned_id, cores_needed_list, communicate_on_chip_edgeset,_ = stage
         logger.info(f'Generating instructions for stage {stageid}/{len(stages)}...')
         instruction_cur = get_instrctions_for_a_stage(
             stageid,
@@ -257,4 +258,4 @@ def cg_mapping(model):
                     'instructions': instruction_cur[core_name]['instructions']
                 }
     logger.info(f'Instructions generated.')
-    return instructions
+    return instructions, stages
