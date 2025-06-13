@@ -17,7 +17,6 @@ def cg_mapping(model):
     print_graph_nodes(onnx_graph)
 
     graph = build_graph(onnx_graph)
-    
 
     is_conv_node = []
     is_fc_node = []
@@ -38,6 +37,7 @@ def cg_mapping(model):
     belong_node = get_belong_node(graph, is_conv_node, is_fc_node)
 
     logger.debug(f'belong_node: {[(i, v)for i, v in enumerate(belong_node)]}')
+    logger.debug(f'conv_node: {[i for i, v in enumerate(belong_node) if i == v and is_fc_node[i] == 0]}')
 
     # 0-based, original id -> reassigned id
     conv_node_reassigned_id = [0] * len(is_conv_node)
@@ -91,6 +91,10 @@ def cg_mapping(model):
             input_data_conv_node_reassigned_id[i_bel_reassigned_id] = get_tensor_shape(
                 onnx_graph, onnx_graph.input[0].name)
 
+    logger.debug(f'reassigned_id_graph_edgeset: {reassigned_id_graph_edgeset}')
+    
+    logger.debug(f'reassigned_id_graph: {[(i,g) for i,g in enumerate(reassigned_id_graph)]}')
+    
     reassigned_id_rev_graph = [[] for _ in range(number_of_conv_nodes)]  # reversed graph
     for i in range(number_of_conv_nodes):
         for j in reassigned_id_graph[i]:
