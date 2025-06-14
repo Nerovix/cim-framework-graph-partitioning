@@ -224,10 +224,9 @@ def assert_cross_block_acyclic(graph, group, keys):
                 q.append(nxt)
 
     logger.debug(f"Cross-block dependency graph has {seen} blocks out of {len(blocks)}")
-    assert seen == len(blocks), (
-        "Cross-block dependency graph is cyclic. "
-        "Supported models are limited; may need to adjust get_belong_node()."
-    )
+    if seen != len(blocks):
+        raise AssertionError(f"Invalid cross-block dependency graph: detected a cycle (only {seen}/{len(blocks)} blocks reached)")
+    logger.info("Cross-block dependency graph is acyclic and valid.")
 
 
 def get_belong_node(graph, is_conv_node, is_fc_node):
@@ -258,6 +257,118 @@ def get_belong_node(graph, is_conv_node, is_fc_node):
             
     assert_cross_block_acyclic(graph, label, keys)
     return label
+
+def get_belong_node_old(graph, is_conv_node, is_fc_node):
+    
+    topo = topsort(graph)
+    topo_pos = {v: i for i, v in enumerate(topo)}
+
+    assert_fc_cut(graph, is_fc_node)
+    first_fc = next(i for i in topo if is_fc_node[i])
+
+    keys = [i for i in topo if is_conv_node[i] and topo_pos[i] < topo_pos[first_fc]]
+    keys.append(first_fc)
+    
+    logger.info('Finding belong node...')
+    assert_fc_cut(graph, is_fc_node)
+    indeg = [len(g[0]) for g in graph]
+    topsort_queue = deque([i for i, v in enumerate(indeg) if v == 0])
+    last = [-1] * len(graph)
+    dp_longest_chain = [1] * len(graph)
+    while topsort_queue:
+        cur_node = topsort_queue.popleft()
+        for next_node in graph[cur_node][1]:
+            if dp_longest_chain[next_node] < dp_longest_chain[cur_node] + 1:
+                dp_longest_chain[next_node] = dp_longest_chain[cur_node] + 1
+                last[next_node] = cur_node
+            indeg[next_node] -= 1
+            if indeg[next_node] == 0:
+                topsort_queue.append(next_node)
+    main_chain = []
+    cur_node = 0
+    for i in range(len(graph)):
+        if dp_longest_chain[i] > dp_longest_chain[cur_node]:
+            cur_node = i
+    while cur_node != -1:
+        main_chain.append(cur_node)
+        cur_node = last[cur_node]
+
+    main_chain.reverse()
+    in_main_chain = [0] * len(graph)
+    for i in main_chain:
+        in_main_chain[i] = 1
+
+    # print(main_chain)
+    main_chain_edges = dict()
+    for i in range(len(main_chain) - 1):
+        main_chain_edges[(main_chain[i], main_chain[i + 1])] = True
+        main_chain_edges[(main_chain[i + 1], main_chain[i])] = True
+
+    # Add nodes should be on the main chain
+    # Calculate the nearest convolution nodes for every node on the main chain, and set its belong_node to the nearest conlolution nodes.
+    belong_node = [-1] * len(graph)
+    topsort_queue = deque([i for i in range(len(graph)) if is_conv_node[i]
+              == 1 and in_main_chain[i] == 1])
+    while topsort_queue:
+        cur_node = topsort_queue.popleft()
+        if belong_node[cur_node] == -1:
+            belong_node[cur_node] = cur_node
+        for next_node in graph[cur_node][0] + graph[cur_node][1]:
+            if belong_node[next_node] != -1:
+                continue
+            if (cur_node, next_node) in main_chain_edges and is_fc_node[next_node] == 0:
+                belong_node[next_node] = belong_node[cur_node]
+                topsort_queue.append(next_node)
+
+    # The rest should be the residual convolution nodes and non-convolution nodes near them,
+    # Set the belong_node of the non-convolution nodes as their coresponding convolution nodes.
+    topsort_queue = deque([i for i in range(len(graph)) if is_conv_node[i]
+              == 1 and in_main_chain[i] == 0])
+    while topsort_queue:
+        cur_node = topsort_queue.popleft()
+        if belong_node[cur_node] == -1:
+            belong_node[cur_node] = cur_node
+        for next_node in graph[cur_node][0] + graph[cur_node][1]:
+            if belong_node[next_node] != -1:
+                continue
+            if (cur_node, next_node) not in main_chain_edges and is_fc_node[next_node] == 0:
+                belong_node[next_node] = belong_node[cur_node]
+                topsort_queue.append(next_node)
+
+
+    # If this is done once and there are still nodes left, then there is a residual branch without convolution
+    # Normally, a residual branch either has no operator or must have at least one convolution
+    # but anyway we put this into consideration as well
+    topsort_queue = deque([i for i in range(len(graph)) if belong_node[i] != -1])
+    while topsort_queue:
+        cur_node = topsort_queue.popleft()
+        if belong_node[cur_node] == -1:
+            belong_node[cur_node] = cur_node
+        for next_node in graph[cur_node][0] + graph[cur_node][1]:
+            if belong_node[next_node] == -1 and is_fc_node[next_node] == 0:
+                belong_node[next_node] = belong_node[cur_node]
+                topsort_queue.append(next_node)
+
+    # Finally, FC layers
+    topsort_queue = deque([first_fc])
+    logger.info(topsort_queue)
+    while topsort_queue:
+        cur_node = topsort_queue.popleft()
+        if belong_node[cur_node] == -1:
+            belong_node[cur_node] = cur_node
+        for next_node in graph[cur_node][0] + graph[cur_node][1]:
+            if belong_node[next_node] == -1:
+                belong_node[next_node] = belong_node[cur_node]
+                topsort_queue.append(next_node)
+
+    assert min(belong_node) >= 0 # no -1 in belong_node, every node belongs to certain convolution node or FC node
+    try:
+        assert_cross_block_acyclic(graph, belong_node, keys)
+    except AssertionError as e:
+        logger.info(f"High-quality belong_node partitioning failed, falling back to the more stable method...")
+        belong_node = get_belong_node(graph, is_conv_node, is_fc_node)
+    logger.info('Found belong node.')
+    return belong_node
 
 
 # Do a simple DFS to find all dependency closure for dp.

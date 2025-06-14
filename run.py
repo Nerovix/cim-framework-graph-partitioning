@@ -75,7 +75,7 @@ output_dir = args.output_dir
 if not os.path.exists(output_dir):
     os.makedirs(output_dir, exist_ok=True)
 
-c_conf.instructions_file_path = f'{output_dir}/instructions_{model_name}_{args.strategy}_T{args.T}_B{args.B}_C{args.C}_batch{c_conf.batch_size}.json'
+c_conf.instructions_file_path = f'{output_dir}/instructions_{model_name}_{args.strategy}_T{args.T}_K{args.K}_B{args.B}_C{args.C}_batch{c_conf.batch_size}.json'
 c_conf.visualize_flag = args.visualize
 
 main.main()

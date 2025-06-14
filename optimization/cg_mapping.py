@@ -1,4 +1,4 @@
-from preprocess.graph import build_graph, find_all_prefixes, get_belong_node, topsort
+from preprocess.graph import build_graph, find_all_prefixes, get_belong_node, topsort, get_belong_node_old
 from optimization.cost import calc_best_strategy_on_chip
 from preprocess.read_file import get_tensor_shape
 from preprocess.model_preprocess import onnx_split_large_conv_pass
@@ -34,7 +34,7 @@ def cg_mapping(model):
         else:
             is_fc_node.append(0)
 
-    belong_node = get_belong_node(graph, is_conv_node, is_fc_node)
+    belong_node = get_belong_node_old(graph, is_conv_node, is_fc_node)
 
     logger.debug(f'belong_node: {[(i, v)for i, v in enumerate(belong_node)]}')
     logger.debug(f'conv_node: {[i for i, v in enumerate(belong_node) if i == v and is_fc_node[i] == 0]}')
